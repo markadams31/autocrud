@@ -39,6 +39,21 @@ resource "azurerm_linux_web_app" "main" {
     }
   }
 
+  # Turn on web-server HTTP logging so the AppServiceHTTPLogs diagnostic category
+  # (routed to Log Analytics in monitoring.tf) actually emits — one record per
+  # inbound request. Without this httpLoggingEnabled is false and that table stays
+  # empty even with the diagnostic setting in place. It's the edge-level request
+  # view that in-app instrumentation can't see: e.g. an expired-session EasyAuth
+  # 302 → Entra redirect, which is answered before the request reaches the app.
+  logs {
+    http_logs {
+      file_system {
+        retention_in_days = 7
+        retention_in_mb   = 35
+      }
+    }
+  }
+
   app_settings = {
     # Mirrors the env vars the app reads (see backend/app/config.py, main.py,
     # middleware.py, telemetry.py).
