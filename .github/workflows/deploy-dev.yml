@@ -5,6 +5,15 @@ name: Deploy · dev
 on:
   push:
     branches: [main]
+  # Manual rollback/redeploy: supply a previously built tag (e.g. an earlier
+  # commit SHA) to repoint dev at it without rebuilding. Leave blank to build
+  # and deploy the current HEAD.
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Existing image tag to redeploy without rebuilding (blank = build + deploy HEAD).
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -27,5 +36,7 @@ jobs:
     uses: ./.github/workflows/deploy.yml
     with:
       environment: dev
-      image_tag: ${{ github.sha }}
+      image_tag: ${{ inputs.image_tag || github.sha }}
+      # Rebuild for a normal HEAD deploy; repoint-only when a prior tag is given.
+      build: ${{ !inputs.image_tag }}
     secrets: inherit

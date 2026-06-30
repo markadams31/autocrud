@@ -1,5 +1,9 @@
 # Auto CRUD
 
+[![Deploy · dev](https://github.com/markadams31/autocrud/actions/workflows/deploy-dev.yml/badge.svg)](https://github.com/markadams31/autocrud/actions/workflows/deploy-dev.yml)
+[![CodeQL](https://github.com/markadams31/autocrud/actions/workflows/codeql.yml/badge.svg)](https://github.com/markadams31/autocrud/actions/workflows/codeql.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 A single FastAPI application that deploys against any Azure SQL database and instantly
 exposes a full CRUD API — and a matching web UI — for every table it finds, with no
 hand-written models, no table-specific code, and no redeployment when the schema changes.

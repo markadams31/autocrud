@@ -33,6 +33,7 @@ jobs:
       frontend: ${{ steps.decide.outputs.frontend }}
       infra: ${{ steps.decide.outputs.infra }}
       docker: ${{ steps.decide.outputs.docker }}
+      workflows: ${{ steps.decide.outputs.workflows }}
     steps:
       - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
         id: filter
@@ -50,10 +51,16 @@ jobs:
               - '.dockerignore'
               - 'backend/**'
               - 'frontend/**'
-            global:
+            # Any workflow change → lint the workflows (actionlint).
+            workflows:
               - '.github/workflows/**'
+            # Only ci.yml itself can affect every tier, so force a full run on
+            # that — not on edits to deploy/codeql/etc. workflows, which the CI
+            # tiers don't exercise.
+            global:
+              - '.github/workflows/ci.yml'
       # Force every area on when this isn't a PR (i.e. a deploy gate via
-      # workflow_call), or when a workflow file changed (could affect any job).
+      # workflow_call), or when ci.yml itself changed (could affect any job).
       - id: decide
         env:
           EVENT: ${{ github.event_name }}
@@ -62,6 +69,7 @@ jobs:
           FRONTEND: ${{ steps.filter.outputs.frontend }}
           INFRA: ${{ steps.filter.outputs.infra }}
           DOCKER: ${{ steps.filter.outputs.docker }}
+          WORKFLOWS: ${{ steps.filter.outputs.workflows }}
         run: |
           emit() {
             local value="$2"
@@ -74,6 +82,29 @@ jobs:
           emit frontend "$FRONTEND"
           emit infra "$INFRA"
           emit docker "$DOCKER"
+          emit workflows "$WORKFLOWS"
+
+  actionlint:
+    name: Actionlint
+    needs: changes
+    if: needs.changes.outputs.workflows == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      # Pinned release binary, not a third-party action. shellcheck ships on the
+      # runner, so actionlint also lints the shell in `run:` blocks.
+      - name: Install actionlint
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+        run: |
+          curl -fsSL -o actionlint.tar.gz \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          tar -xzf actionlint.tar.gz actionlint
+      - name: Lint workflows
+        run: ./actionlint -color
 
   backend-tests:
     name: Backend · unit + API
@@ -262,6 +293,7 @@ jobs:
     if: always()
     needs:
       - changes
+      - actionlint
       - backend-tests
       - backend-integration
       - frontend-checks

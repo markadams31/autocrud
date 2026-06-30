@@ -20,6 +20,11 @@ on:
         description: Immutable image tag to build and deploy (commit SHA or release tag).
         required: true
         type: string
+      build:
+        description: Build the image in ACR first. Set false to repoint at an already-built tag (rollback).
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -58,6 +63,7 @@ jobs:
       # keeps the uploaded context small. Tag with the immutable input tag and
       # move :latest.
       - name: Build and push image in ACR
+        if: ${{ inputs.build }}
         run: |
           az acr build \
             --registry "$ACR_NAME" \
