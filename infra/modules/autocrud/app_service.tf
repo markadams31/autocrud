@@ -1,0 +1,128 @@
+resource "azurerm_service_plan" "main" {
+  name                = module.naming.app_service_plan.name
+  resource_group_name = azurerm_resource_group.main.name
+  location            = azurerm_resource_group.main.location
+  os_type             = "Linux"
+  sku_name            = var.app_service_sku
+}
+
+resource "azurerm_linux_web_app" "main" {
+  name                = local.linux_web_app_name
+  resource_group_name = azurerm_resource_group.main.name
+  location            = azurerm_resource_group.main.location
+  service_plan_id     = azurerm_service_plan.main.id
+  https_only          = true
+
+  identity {
+    type = "SystemAssigned"
+  }
+
+  site_config {
+    always_on = true
+
+    # Route App Service's health probe to the app's /health readiness endpoint so
+    # an instance that can't serve (startup reflection failed, or the database is
+    # unreachable — returns 503, see routes/admin.py) is taken out of rotation and
+    # auto-healed rather than serving errors.
+    health_check_path                 = "/health"
+    health_check_eviction_time_in_min = 5
+
+    # Pull the image from ACR using this app's managed identity (granted AcrPull
+    # below) rather than registry admin credentials — which are disabled. Without
+    # this flag App Service falls back to admin creds and the pull fails with
+    # ImagePullUnauthorizedFailure.
+    container_registry_use_managed_identity = true
+
+    application_stack {
+      docker_image_name   = "${var.docker_image_name}:${var.docker_image_tag}"
+      docker_registry_url = "https://${azurerm_container_registry.main.login_server}"
+    }
+  }
+
+  app_settings = {
+    # Mirrors the env vars the app reads (see backend/app/config.py, main.py,
+    # middleware.py, telemetry.py).
+    DB_SERVER        = azurerm_mssql_server.main.fully_qualified_domain_name
+    DB_DATABASE      = local.mssql_database_name
+    DB_SCHEMAS       = join(",", var.db_schemas)
+    DB_DRIVER        = "ODBC Driver 18 for SQL Server"
+    DB_AUDIT_COLUMNS = join(",", var.db_audit_columns)
+    BULK_MAX_ROWS    = tostring(var.bulk_max_rows)
+    LOG_LEVEL        = var.log_level
+
+    # How the signed-in user is recorded in logs (email / hash / none) and the
+    # salt for hash mode. See app/config.py and app/middleware.py.
+    LOG_USER_IDENTITY      = var.log_user_identity
+    LOG_USER_IDENTITY_SALT = var.log_user_identity_salt
+
+    WEBSITES_PORT = "8000"
+
+    # Application Insights
+    APPINSIGHTS_INSTRUMENTATIONKEY             = azurerm_application_insights.main.instrumentation_key
+    APPLICATIONINSIGHTS_CONNECTION_STRING      = azurerm_application_insights.main.connection_string
+    APPINSIGHTS_SAMPLING_RATIO                 = tostring(var.appinsights_sampling_ratio)
+    ApplicationInsightsAgent_EXTENSION_VERSION = "~3"
+
+    # EasyAuth client secret — referenced by name in auth_settings_v2 below.
+    # Stored as an app setting so it never appears in the Terraform plan output.
+    MICROSOFT_PROVIDER_AUTHENTICATION_SECRET = azuread_application_password.easyauth.value
+  }
+
+  # ---------------------------------------------------------------------------
+  # EasyAuth v2 — Microsoft Entra ID
+  #
+  # Validates every inbound request. Unauthenticated requests are redirected
+  # to the Entra login page. After login, EasyAuth also acquires an Azure SQL
+  # token on the user's behalf (via the user_impersonation scope requested
+  # below) and injects it as X-MS-TOKEN-AAD-ACCESS-TOKEN — the header the app
+  # reads in connection.py to authenticate database connections as the real user.
+  # ---------------------------------------------------------------------------
+  auth_settings_v2 {
+    auth_enabled           = true
+    default_provider       = "azureactivedirectory"
+    unauthenticated_action = "RedirectToLoginPage"
+    require_https          = true
+
+    # Let /health through without authentication. Both the App Service health
+    # probe (site_config.health_check_path above) and the CI deploy smoke check
+    # hit it anonymously; without this they'd get a 302 to the Entra login page
+    # instead of the app's real 200/503. /health exposes only a table count.
+    excluded_paths = ["/health"]
+
+    active_directory_v2 {
+      client_id                  = azuread_application.main.client_id
+      client_secret_setting_name = "MICROSOFT_PROVIDER_AUTHENTICATION_SECRET"
+      tenant_auth_endpoint       = "https://login.microsoftonline.com/${var.tenant_id}/v2.0"
+      allowed_audiences          = ["api://${azuread_application.main.client_id}"]
+
+      # Request the Azure SQL scope so EasyAuth acquires and stores the user's
+      # SQL token for injection into downstream requests.
+      login_parameters = {
+        scope = "openid profile email offline_access https://database.windows.net/user_impersonation"
+      }
+    }
+
+    login {
+      token_store_enabled = true
+    }
+  }
+
+  lifecycle {
+    # Image tag is managed by the deployment pipeline, not Terraform.
+    # After the initial deploy, update the running image with:
+    #   az webapp config container set \
+    #     --name <app-name> --resource-group <rg> \
+    #     --docker-custom-image-name <acr-login-server>/<image>:<tag>
+    ignore_changes = [
+      site_config[0].application_stack[0].docker_image_name,
+    ]
+  }
+}
+
+# Grant the App Service's managed identity permission to pull images from ACR.
+# No registry admin credentials are needed with this in place.
+resource "azurerm_role_assignment" "acr_pull" {
+  scope                = azurerm_container_registry.main.id
+  role_definition_name = "AcrPull"
+  principal_id         = azurerm_linux_web_app.main.identity[0].principal_id
+}

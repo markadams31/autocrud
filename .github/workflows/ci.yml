@@ -1,0 +1,280 @@
+name: CI
+
+# Runs on every PR into main, and is also called as a gate by the deploy
+# workflows (workflow_call) so nothing ships without the relevant suite passing.
+# It deliberately does NOT trigger on push to main — the deploy-dev workflow
+# calls it there instead, so main builds run the suite exactly once.
+#
+# On PRs the jobs are path-filtered: a frontend-only change skips the backend
+# tiers, a docs-only change skips everything, etc. When called as a deploy gate
+# (push/release), every tier runs regardless of paths.
+on:
+  pull_request:
+    branches: [main]
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read # paths-filter reads the PR's changed files
+    outputs:
+      backend: ${{ steps.decide.outputs.backend }}
+      frontend: ${{ steps.decide.outputs.frontend }}
+      infra: ${{ steps.decide.outputs.infra }}
+      docker: ${{ steps.decide.outputs.docker }}
+    steps:
+      - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3
+        id: filter
+        if: github.event_name == 'pull_request'
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+            frontend:
+              - 'frontend/**'
+            infra:
+              - 'infra/**'
+            docker:
+              - 'Dockerfile'
+              - '.dockerignore'
+              - 'backend/**'
+              - 'frontend/**'
+            global:
+              - '.github/workflows/**'
+      # Force every area on when this isn't a PR (i.e. a deploy gate via
+      # workflow_call), or when a workflow file changed (could affect any job).
+      - id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          GLOBAL: ${{ steps.filter.outputs.global }}
+          BACKEND: ${{ steps.filter.outputs.backend }}
+          FRONTEND: ${{ steps.filter.outputs.frontend }}
+          INFRA: ${{ steps.filter.outputs.infra }}
+          DOCKER: ${{ steps.filter.outputs.docker }}
+        run: |
+          emit() {
+            local value="$2"
+            if [ "$EVENT" != "pull_request" ] || [ "$GLOBAL" = "true" ]; then
+              value=true
+            fi
+            echo "$1=$value" >> "$GITHUB_OUTPUT"
+          }
+          emit backend "$BACKEND"
+          emit frontend "$FRONTEND"
+          emit infra "$INFRA"
+          emit docker "$DOCKER"
+
+  backend-tests:
+    name: Backend · unit + API
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync --extra test
+      # Tiers 1 & 2 run on SQLite with the dependencies overridden — no Docker,
+      # no ODBC driver, no real SQL Server needed (see backend/tests/README.md).
+      - name: Run unit + API tests
+        run: uv run pytest -m "not integration"
+
+  backend-integration:
+    name: Backend · integration (real SQL Server)
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      # pyodbc needs the Microsoft ODBC driver present to actually connect — the
+      # same driver the runtime image installs (see Dockerfile).
+      - name: Install Microsoft ODBC Driver 18
+        run: |
+          curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
+            | sudo gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg
+          echo "deb [signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/ubuntu/$(lsb_release -rs)/prod $(lsb_release -cs) main" \
+            | sudo tee /etc/apt/sources.list.d/mssql-release.list
+          sudo apt-get update
+          sudo ACCEPT_EULA=Y apt-get install -y --no-install-recommends msodbcsql18 unixodbc-dev
+      # The integration fixtures skip (rather than pull) if the image is absent,
+      # so pre-pull it here to make tier 3 actually run.
+      - name: Pre-pull SQL Server image
+        run: docker pull mcr.microsoft.com/mssql/server:2022-latest
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          enable-cache: true
+      - name: Run integration tier
+        working-directory: backend
+        run: |
+          uv sync --extra test
+          uv run pytest -m integration
+
+  frontend-checks:
+    name: Frontend · lint + unit + build
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Unit tests
+        run: npm run test:unit
+      - name: Type-check + build
+        run: npm run build
+
+  frontend-e2e:
+    name: Frontend · Playwright e2e
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+      # playwright.config.ts builds + serves the app via `vite preview`, and the
+      # specs stub every API call, so no backend or database is needed.
+      - name: Build the app
+        run: npm run build
+      - name: Run e2e tests
+        run: npm run test:e2e
+      - name: Upload Playwright report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/
+          retention-days: 7
+
+  docker-build:
+    name: Docker · build check
+    needs: changes
+    if: needs.changes.outputs.docker == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      # Build-only (no push) so a broken Dockerfile fails the PR. The real
+      # build/push happens in ACR during deploy.
+      - name: Build image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  terraform-validate:
+    name: Terraform · fmt + validate
+    needs: changes
+    if: needs.changes.outputs.infra == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        with:
+          terraform_version: 1.9.8
+          terraform_wrapper: false
+      - name: Format check
+        working-directory: infra
+        run: terraform fmt -check -recursive
+      # -backend=false validates configuration without touching remote state or
+      # needing Azure credentials. validate doesn't require variable values.
+      - name: Validate module
+        working-directory: infra/modules/autocrud
+        run: |
+          terraform init -backend=false
+          terraform validate
+      - name: Validate dev
+        working-directory: infra/environments/dev
+        run: |
+          terraform init -backend=false
+          terraform validate
+      - name: Validate prod
+        working-directory: infra/environments/prod
+        run: |
+          terraform init -backend=false
+          terraform validate
+
+  # Single required status check for branch protection. Passes when every tier
+  # that ran succeeded (skipped tiers are fine); fails if any failed/was cancelled.
+  ci-success:
+    name: CI success
+    if: always()
+    needs:
+      - changes
+      - backend-tests
+      - backend-integration
+      - frontend-checks
+      - frontend-e2e
+      - docker-build
+      - terraform-validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify no required job failed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "Job results: $RESULTS"
+          for r in $RESULTS; do
+            case "$r" in
+              success|skipped) ;;
+              *) echo "::error::A required job ended with result '$r'"; exit 1 ;;
+            esac
+          done
+          echo "All required jobs passed (or were skipped)."

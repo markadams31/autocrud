@@ -1,0 +1,12 @@
+# Copy to terraform.tfvars and fill in your values.
+# terraform.tfvars is gitignored — never commit it.
+
+subscription_id = "00000000-0000-0000-0000-000000000000"  # Dev Azure subscription ID
+tenant_id       = "00000000-0000-0000-0000-000000000000"  # Entra ID tenant ID
+
+# Schemas to expose via the CRUD API (required — apply fails if omitted).
+db_schemas = ["dbo", "ppm"]
+
+# Columns the database populates via trigger/default, excluded from writes.
+# Optional — omit or leave [] if your database has none.
+db_audit_columns = ["CreatedBy", "CreatedDate", "ModifiedBy", "ModifiedDate"]

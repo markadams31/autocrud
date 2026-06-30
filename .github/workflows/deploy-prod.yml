@@ -1,0 +1,33 @@
+name: Deploy · prod
+
+# Production ships on a published GitHub Release (or a manual run). The `prod`
+# environment (set in the reusable deploy.yml) carries a required-reviewer rule,
+# so GitHub pauses for approval before the deploy job runs.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # OIDC token is minted under the caller's grant (used by deploy.yml)
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    name: CI gate
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    name: Deploy
+    needs: ci
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: prod
+      # Release tag identifies a release build; fall back to the SHA for a
+      # manual (workflow_dispatch) run.
+      image_tag: ${{ github.event.release.tag_name || github.sha }}
+    secrets: inherit

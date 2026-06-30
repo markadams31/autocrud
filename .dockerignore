@@ -1,0 +1,59 @@
+# Build context for `docker build` and `az acr build`. Keep it small and never
+# bake secrets into the image.
+#
+# NOTE on patterns: az acr build's source packer honors .dockerignore but matches
+# more literally than Docker/BuildKit. A trailing-slash directory pattern (e.g.
+# `infra/`) is NOT honored, and a bare name only matches at the top level. So:
+#   • top-level dir  → bare, no trailing slash        e.g. `infra`, `database`
+#   • nested dir     → full path (or `**/` prefix)    e.g. `frontend/node_modules`
+# Verify with `az acr build --debug`: it logs which rule matched each path
+# (`rule '…' matches '…'` vs `no rule for '…'`).
+
+# Git / editors / local tool state
+.git
+.gitignore
+.gitattributes
+.vscode
+.idea
+.claude
+
+# Secrets & environment — must never enter the image
+.env
+.env.*
+!.env.example
+
+# Node — dependencies are reinstalled inside the frontend build stage
+node_modules
+**/node_modules
+frontend/node_modules
+frontend/.vite
+
+# Infra — Terraform state plus ~2 GB of downloaded provider binaries under
+# .terraform; never needed to build or run the image. (Bare path: `infra/` is
+# NOT honored by az acr build's packer — that was shipping the whole tree.)
+infra
+
+# Locally-built SPA — the image rebuilds it from source
+backend/app/frontend
+
+# Sample database scripts — not needed to build or run the image
+database
+
+# Python caches / virtualenvs
+backend/.venv
+**/__pycache__
+**/*.py[cod]
+**/.venv
+**/venv
+**/*.egg-info
+**/.pytest_cache
+**/.mypy_cache
+
+# Docs, licence, and local logs — not part of the runtime image
+*.md
+*.log
+LICENSE
+
+# OS cruft
+.DS_Store
+Thumbs.db

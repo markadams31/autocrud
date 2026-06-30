@@ -1,0 +1,100 @@
+name: Deploy (reusable)
+
+# Builds the image in ACR and rolls it out to one App Service environment.
+# Called by deploy-dev.yml and deploy-prod.yml so the build/deploy/smoke logic
+# lives in exactly one place. Authentication is via OIDC — no stored secrets.
+#
+# The caller must:
+#   - grant `id-token: write` (OIDC token is minted under the caller's grant),
+#   - pass `secrets: inherit` so the environment's AZURE_* secrets resolve,
+#   - target a GitHub Environment that defines the ACR_NAME / APP_NAME /
+#     RESOURCE_GROUP variables and the AZURE_* secrets.
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: Target GitHub Environment (dev or prod).
+        required: true
+        type: string
+      image_tag:
+        description: Immutable image tag to build and deploy (commit SHA or release tag).
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Build image + deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Environment-scoped vars/secrets resolve against this; prod's required-
+    # reviewer rule pauses the run here for approval.
+    environment:
+      name: ${{ inputs.environment }}
+      url: https://${{ vars.APP_NAME }}.azurewebsites.net
+    permissions:
+      id-token: write # required for OIDC azure/login
+      contents: read
+    env:
+      ACR_NAME: ${{ vars.ACR_NAME }}
+      APP_NAME: ${{ vars.APP_NAME }}
+      RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
+      IMAGE_TAG: ${{ inputs.image_tag }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Azure login (OIDC)
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # Remote build in ACR (no local Docker needed). The repo-root .dockerignore
+      # keeps the uploaded context small. Tag with the immutable input tag and
+      # move :latest.
+      - name: Build and push image in ACR
+        run: |
+          az acr build \
+            --registry "$ACR_NAME" \
+            --image "autocrud:$IMAGE_TAG" \
+            --image "autocrud:latest" \
+            .
+
+      # Point the App Service at the immutable tag (clean rollback target) and
+      # restart to pull it. Updating the image directly is expected — the
+      # app_service.tf lifecycle ignores docker_image_name changes.
+      - name: Update App Service image and restart
+        run: |
+          login_server=$(az acr show --name "$ACR_NAME" --query loginServer -o tsv)
+          az webapp config container set \
+            --name "$APP_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --docker-custom-image-name "$login_server/autocrud:$IMAGE_TAG"
+          az webapp restart --name "$APP_NAME" --resource-group "$RESOURCE_GROUP"
+
+      # /health is anonymous (excluded from EasyAuth in app_service.tf) and
+      # returns 200 only when the schema snapshot is loaded AND the database is
+      # reachable — a real readiness gate. It returns 503 while starting up or
+      # while serverless SQL resumes from auto-pause, so retry for a few minutes
+      # before failing the deploy.
+      - name: Smoke check (/health returns 200)
+        run: |
+          host=$(az webapp show --name "$APP_NAME" --resource-group "$RESOURCE_GROUP" --query defaultHostName -o tsv)
+          url="https://$host/health"
+          echo "Probing $url"
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$url" || echo "000")
+            if [ "$code" = "200" ]; then
+              echo "Healthy (HTTP 200)"
+              exit 0
+            fi
+            echo "Attempt $i: HTTP $code — waiting for healthy..."
+            sleep 10
+          done
+          echo "/health did not return 200 in time — failing the deploy."
+          exit 1

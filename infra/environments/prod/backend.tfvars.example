@@ -1,0 +1,15 @@
+# Remote state backend configuration.
+# Copy to backend.tfvars and fill in your values.
+# backend.tfvars is gitignored — never commit it.
+#
+# Usage:
+#   terraform init -backend-config=backend.tfvars
+
+# The subscription containing the Terraform state storage account.
+# This is separate from the landing zone subscription in terraform.tfvars.
+subscription_id      = "00000000-0000-0000-0000-000000000000"
+
+resource_group_name  = "your-tfstate-resource-group"
+storage_account_name = "yourtfstatestorageaccount"
+container_name       = "tfstate"
+key                  = "autocrud/prod/terraform.tfstate"

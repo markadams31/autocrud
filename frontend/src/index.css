@@ -1,0 +1,279 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/geist";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+    --font-heading: var(--font-sans);
+    --font-sans: 'Geist Variable', sans-serif;
+    --color-sidebar-ring: var(--sidebar-ring);
+    --color-sidebar-border: var(--sidebar-border);
+    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+    --color-sidebar-accent: var(--sidebar-accent);
+    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+    --color-sidebar-primary: var(--sidebar-primary);
+    --color-sidebar-foreground: var(--sidebar-foreground);
+    --color-sidebar: var(--sidebar);
+    --color-chart-5: var(--chart-5);
+    --color-chart-4: var(--chart-4);
+    --color-chart-3: var(--chart-3);
+    --color-chart-2: var(--chart-2);
+    --color-chart-1: var(--chart-1);
+    --color-ring: var(--ring);
+    --color-input: var(--input);
+    --color-border: var(--border);
+    --color-destructive: var(--destructive);
+    --color-success: var(--success);
+    --color-accent-foreground: var(--accent-foreground);
+    --color-accent: var(--accent);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-muted: var(--muted);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-secondary: var(--secondary);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-primary: var(--primary);
+    --color-popover-foreground: var(--popover-foreground);
+    --color-popover: var(--popover);
+    --color-card-foreground: var(--card-foreground);
+    --color-card: var(--card);
+    --color-foreground: var(--foreground);
+    --color-background: var(--background);
+    --radius-sm: calc(var(--radius) * 0.6);
+    --radius-md: calc(var(--radius) * 0.8);
+    --radius-lg: var(--radius);
+    --radius-xl: calc(var(--radius) * 1.4);
+    --radius-2xl: calc(var(--radius) * 1.8);
+    --radius-3xl: calc(var(--radius) * 2.2);
+    --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+:root {
+    /* Cool-slate neutrals — a faint blue undertone so the grays read as
+       deliberate "slate" rather than flat default gray. */
+    --background: oklch(0.992 0.002 264);
+    --foreground: oklch(0.21 0.024 266);
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.21 0.024 266);
+    --popover: oklch(1 0 0);
+    --popover-foreground: oklch(0.21 0.024 266);
+    /* Indigo — the single brand accent: primary actions, focus rings, the
+       active nav item, and the brand mark. Used sparingly on purpose. */
+    --primary: oklch(0.545 0.196 277);
+    --primary-foreground: oklch(0.985 0.012 277);
+    --secondary: oklch(0.968 0.004 264);
+    --secondary-foreground: oklch(0.27 0.03 266);
+    --muted: oklch(0.968 0.004 264);
+    --muted-foreground: oklch(0.552 0.022 264);
+    --accent: oklch(0.955 0.018 277);
+    --accent-foreground: oklch(0.42 0.14 277);
+    --destructive: oklch(0.585 0.22 27);
+    /* Positive/success semantic — the app's "good news" colour (boolean-true dot,
+       "ready to import"). The mirror of --destructive: shares the app's green hue
+       and is tuned to the same weight so success/error labels read as a pair, and
+       so it works as both a small dot and small text. */
+    --success: oklch(0.6 0.17 162);
+    --border: oklch(0.923 0.005 264);
+    --input: oklch(0.923 0.005 264);
+    --ring: oklch(0.545 0.196 277);
+    --chart-1: oklch(0.62 0.19 277);
+    --chart-2: oklch(0.6 0.12 220);
+    --chart-3: oklch(0.65 0.15 160);
+    --chart-4: oklch(0.72 0.16 70);
+    --chart-5: oklch(0.64 0.2 15);
+    --radius: 0.625rem;
+    --sidebar: oklch(0.984 0.004 264);
+    --sidebar-foreground: oklch(0.21 0.024 266);
+    --sidebar-primary: oklch(0.545 0.196 277);
+    --sidebar-primary-foreground: oklch(0.985 0.012 277);
+    --sidebar-accent: oklch(0.95 0.022 277);
+    --sidebar-accent-foreground: oklch(0.44 0.15 277);
+    --sidebar-border: oklch(0.923 0.005 264);
+    --sidebar-ring: oklch(0.545 0.196 277);
+    /* Opaque row hover/press tints — kept at a clearly-visible lightness with a
+       faint indigo undertone that matches the accent. */
+    --row-hover: oklch(0.937 0.014 277);
+    --row-active: oklch(0.905 0.02 277);
+}
+
+.dark {
+    --background: oklch(0.145 0 0);
+    --foreground: oklch(0.985 0 0);
+    --card: oklch(0.205 0 0);
+    --card-foreground: oklch(0.985 0 0);
+    --popover: oklch(0.205 0 0);
+    --popover-foreground: oklch(0.985 0 0);
+    --primary: oklch(0.922 0 0);
+    --primary-foreground: oklch(0.205 0 0);
+    --secondary: oklch(0.269 0 0);
+    --secondary-foreground: oklch(0.985 0 0);
+    --muted: oklch(0.269 0 0);
+    --muted-foreground: oklch(0.708 0 0);
+    --accent: oklch(0.269 0 0);
+    --accent-foreground: oklch(0.985 0 0);
+    --destructive: oklch(0.704 0.191 22.216);
+    /* Brighter in dark mode so the success dot keeps the same visual weight. */
+    --success: oklch(0.7 0.17 162);
+    --border: oklch(1 0 0 / 10%);
+    --input: oklch(1 0 0 / 15%);
+    --ring: oklch(0.556 0 0);
+    --chart-1: oklch(0.87 0 0);
+    --chart-2: oklch(0.556 0 0);
+    --chart-3: oklch(0.439 0 0);
+    --chart-4: oklch(0.371 0 0);
+    --chart-5: oklch(0.269 0 0);
+    --sidebar: oklch(0.205 0 0);
+    --sidebar-foreground: oklch(0.985 0 0);
+    --sidebar-primary: oklch(0.488 0.243 264.376);
+    --sidebar-primary-foreground: oklch(0.985 0 0);
+    --sidebar-accent: oklch(0.269 0 0);
+    --sidebar-accent-foreground: oklch(0.985 0 0);
+    --sidebar-border: oklch(1 0 0 / 10%);
+    --sidebar-ring: oklch(0.556 0 0);
+    /* Lighter than --card (0.205) so the hover lifts off the surface in dark mode. */
+    --row-hover: oklch(0.27 0 0);
+    --row-active: oklch(0.32 0 0);
+}
+
+/* ── Accent themes ──────────────────────────────────────────────────────────
+   Layered over light/dark: an accent only re-points the brand colour (primary
+   actions, focus rings, active nav, the change-flash). Declared after :root/.dark
+   so it wins for the variables it sets, in both light and dark mode — including
+   "indigo", which must be explicit (not just the light :root default) so the
+   brand colour also applies in dark mode rather than the monochrome fallback. */
+[data-accent="indigo"] {
+    --primary: oklch(0.545 0.196 277);
+    --primary-foreground: oklch(0.985 0.012 277);
+    --ring: oklch(0.545 0.196 277);
+    --sidebar-primary: oklch(0.545 0.196 277);
+    --sidebar-ring: oklch(0.545 0.196 277);
+}
+[data-accent="violet"] {
+    --primary: oklch(0.55 0.2 300);
+    --primary-foreground: oklch(0.985 0.01 300);
+    --ring: oklch(0.55 0.2 300);
+    --sidebar-primary: oklch(0.55 0.2 300);
+    --sidebar-ring: oklch(0.55 0.2 300);
+}
+[data-accent="blue"] {
+    --primary: oklch(0.55 0.18 255);
+    --primary-foreground: oklch(0.985 0.01 255);
+    --ring: oklch(0.55 0.18 255);
+    --sidebar-primary: oklch(0.55 0.18 255);
+    --sidebar-ring: oklch(0.55 0.18 255);
+}
+[data-accent="emerald"] {
+    --primary: oklch(0.6 0.15 162);
+    --primary-foreground: oklch(0.99 0.02 162);
+    --ring: oklch(0.6 0.15 162);
+    --sidebar-primary: oklch(0.6 0.15 162);
+    --sidebar-ring: oklch(0.6 0.15 162);
+}
+[data-accent="rose"] {
+    --primary: oklch(0.585 0.2 15);
+    --primary-foreground: oklch(0.985 0.015 15);
+    --ring: oklch(0.585 0.2 15);
+    --sidebar-primary: oklch(0.585 0.2 15);
+    --sidebar-ring: oklch(0.585 0.2 15);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+    }
+  body {
+    @apply bg-background text-foreground;
+    }
+  html {
+    @apply font-sans;
+    }
+}
+
+@layer utilities {
+  /*
+   * Always-visible, slim scrollbars for the data grid. Windows 11 auto-hides
+   * overlay scrollbars by default, which hid the grid's horizontal scrollbar
+   * entirely; this makes the scroll affordance explicit and on-brand.
+   */
+  .table-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+  .table-scroll::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  .table-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .table-scroll::-webkit-scrollbar-thumb {
+    background-color: var(--border);
+    border-radius: 9999px;
+    border: 2px solid var(--card);
+  }
+  .table-scroll::-webkit-scrollbar-thumb:hover {
+    background-color: var(--muted-foreground);
+  }
+  .table-scroll::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  /*
+   * Shimmer sweep for loading skeletons. Sits on top of the muted base colour
+   * and sweeps a soft highlight left→right. Every shimmer element shares the
+   * same 1.6s cycle, so a grid of skeletons pulses in unison rather than at
+   * random offsets — the "synchronized shimmer" effect.
+   */
+  .shimmer {
+    position: relative;
+    overflow: hidden;
+  }
+  .shimmer::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background: linear-gradient(
+      90deg,
+      transparent,
+      color-mix(in oklch, var(--foreground) 7%, transparent),
+      transparent
+    );
+    animation: shimmer-sweep 1.6s ease-in-out infinite;
+  }
+  @keyframes shimmer-sweep {
+    100% {
+      transform: translateX(100%);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .shimmer::after {
+      animation: none;
+    }
+  }
+
+  /*
+   * Change-flash. A row briefly washes with the accent colour and fades back to
+   * its normal background, to draw the eye to a just-created or just-updated
+   * record. Default fill-mode leaves no inline style behind, so row hover/select
+   * styling keeps working once the animation ends.
+   */
+  @keyframes row-flash {
+    from {
+      background-color: color-mix(in oklch, var(--primary) 22%, transparent);
+    }
+    to {
+      background-color: transparent;
+    }
+  }
+  .row-flash {
+    animation: row-flash 1.2s ease-out;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .row-flash {
+      animation: none;
+    }
+  }
+}

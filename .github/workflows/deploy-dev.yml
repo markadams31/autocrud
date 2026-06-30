@@ -1,0 +1,30 @@
+name: Deploy · dev
+
+# Every merge to main ships to the dev environment, after the full CI suite
+# passes. The build/deploy logic lives in the reusable deploy.yml.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write # OIDC token is minted under the caller's grant (used by deploy.yml)
+
+concurrency:
+  # Never cancel an in-flight deploy; just queue the next one.
+  group: deploy-dev
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    name: CI gate
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    name: Deploy
+    needs: ci
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: dev
+      image_tag: ${{ github.sha }}
+    secrets: inherit

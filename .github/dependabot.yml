@@ -1,0 +1,29 @@
+version: 2
+updates:
+  # Keep the SHA-pinned actions current (and security-patched). Grouped into one
+  # PR so a routine bump doesn't open six.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # Frontend npm dependencies.
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+    groups:
+      frontend:
+        patterns: ["*"]
+
+  # Backend Python dependencies (uv — reads pyproject.toml + uv.lock).
+  - package-ecosystem: "uv"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+    groups:
+      backend:
+        patterns: ["*"]
