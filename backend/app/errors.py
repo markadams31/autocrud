@@ -266,7 +266,8 @@ def friendly_constraint_violation(
     referenced side. Returns None when nothing recognisable matches, so the caller
     falls back to the generic message.
     """
-    cols_of = lambda name: (columns_by_constraint or {}).get(name) or []
+    def cols_of(name):
+        return (columns_by_constraint or {}).get(name) or []
 
     m = _DUP_KEY_RE.search(text)
     if m:
