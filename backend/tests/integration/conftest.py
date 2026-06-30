@@ -23,7 +23,7 @@ import pytest
 pytest.importorskip("testcontainers", reason="testcontainers not installed (uv sync --extra test)")
 
 from testcontainers.core.container import DockerContainer  # noqa: E402
-from testcontainers.core.waiting_utils import wait_for_logs  # noqa: E402
+from testcontainers.core.wait_strategies import LogMessageWaitStrategy  # noqa: E402
 from sqlalchemy import create_engine  # noqa: E402
 
 SA_PASSWORD = "Str0ng_Passw0rd!"
@@ -103,10 +103,17 @@ def mssql_engine():
         .with_env("MSSQL_SA_PASSWORD", SA_PASSWORD)
         .with_env("MSSQL_PID", "Developer")
         .with_exposed_ports(1433)
+        # Block on .start() until SQL Server logs readiness — the structured wait
+        # strategy. (The old wait_for_logs(container, <string>) form is deprecated
+        # in testcontainers 4.x.)
+        .waiting_for(
+            LogMessageWaitStrategy(
+                "SQL Server is now ready for client connections"
+            ).with_startup_timeout(180)
+        )
     )
     try:
         container.start()
-        wait_for_logs(container, "SQL Server is now ready for client connections", timeout=180)
     except Exception as e:  # Docker not running / image pull failed / startup timeout
         try:
             container.stop()

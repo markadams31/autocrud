@@ -74,7 +74,7 @@ jobs:
           az webapp config container set \
             --name "$APP_NAME" \
             --resource-group "$RESOURCE_GROUP" \
-            --docker-custom-image-name "$login_server/autocrud:$IMAGE_TAG"
+            --container-image-name "$login_server/autocrud:$IMAGE_TAG"
           az webapp restart --name "$APP_NAME" --resource-group "$RESOURCE_GROUP"
 
       # /health is anonymous (excluded from EasyAuth in app_service.tf) and
