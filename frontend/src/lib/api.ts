@@ -56,12 +56,13 @@ export class ApiError extends Error {
 
 // ── EasyAuth session refresh ─────────────────────────────────────────────────
 //
-// App Service EasyAuth doesn't refresh the Azure SQL token automatically — once
-// it expires the backend returns 401 UNAUTHENTICATED. These built-in EasyAuth
-// endpoints refresh the token store (using the stored refresh token) and, as a
-// last resort, send the user back through sign-in. Both are same-origin in
-// production; locally the dev auth proxy keeps tokens fresh so this path is
-// rarely exercised.
+// App Service EasyAuth doesn't refresh the Azure SQL token automatically. When
+// the session lapses, a protected XHR comes back as a 401 or — because the App
+// Service uses unauthenticated_action = RedirectToLoginPage — an opaque redirect
+// to the Entra sign-in page. These built-in EasyAuth endpoints refresh the token
+// store (using the stored refresh token) and, as a last resort, send the user
+// back through sign-in. Both are same-origin in production; locally the dev auth
+// proxy keeps tokens fresh so this path is rarely exercised.
 const AUTH_REFRESH_PATH = '/.auth/refresh'
 const AUTH_LOGIN_PATH = '/.auth/login/aad'
 
@@ -70,7 +71,7 @@ const AUTH_LOGIN_PATH = '/.auth/login/aad'
 let refreshInFlight: Promise<boolean> | null = null
 
 function refreshSession(): Promise<boolean> {
-  refreshInFlight ??= fetch(AUTH_REFRESH_PATH, { credentials: 'same-origin' })
+  refreshInFlight ??= fetch(AUTH_REFRESH_PATH, { credentials: 'same-origin', redirect: 'manual' })
     .then((r) => r.ok)
     .catch(() => false)
     .finally(() => {
@@ -91,6 +92,11 @@ async function request<T>(path: string, init?: RequestInit, retried = false): Pr
   try {
     res = await fetch(path, {
       ...init,
+      // `manual` so an expired-session 302 to the Entra login page comes back as
+      // an opaque redirect we can detect (below) instead of being followed
+      // cross-origin — which fails CORS and is indistinguishable from the server
+      // being down. The API itself never legitimately redirects.
+      redirect: 'manual',
       headers: {
         'Content-Type': 'application/json',
         ...init?.headers,
@@ -104,10 +110,12 @@ async function request<T>(path: string, init?: RequestInit, retried = false): Pr
     })
   }
 
-  // 401 means the EasyAuth session/token has expired. Refresh it transparently
-  // (once) and replay the request so the user never notices; if the refresh
-  // can't recover the session, hand them off to sign in again.
-  if (res.status === 401) {
+  // An expired EasyAuth session shows up as a 401 or — because the App Service
+  // redirects rather than 401s (unauthenticated_action = RedirectToLoginPage) —
+  // an opaque redirect to the Entra sign-in page. Either way, refresh the session
+  // transparently (once) and replay so the user never notices; if the refresh
+  // can't recover it, hand them off to sign in again.
+  if (res.status === 401 || res.type === 'opaqueredirect') {
     if (!retried && (await refreshSession())) {
       return request<T>(path, init, true)
     }
