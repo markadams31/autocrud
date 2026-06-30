@@ -15,7 +15,6 @@ from sqlalchemy.dialects.mssql import (
     VARCHAR,
 )
 
-from app import reflection
 from app.reflection import (
     ColumnKind,
     _build_column_info,

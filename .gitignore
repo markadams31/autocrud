@@ -52,4 +52,3 @@ infra/modules/**/.terraform.lock.hcl
 Thumbs.db
 .vscode/
 .idea/
- 

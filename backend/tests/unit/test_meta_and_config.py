@@ -4,7 +4,7 @@ config module's parsing / fail-fast behaviour.
 """
 
 import pytest
-from sqlalchemy import Column, Identity, MetaData, Table, text
+from sqlalchemy import Column, Identity, MetaData, Table
 from sqlalchemy.dialects.mssql import DATETIME2, DECIMAL, INTEGER, NVARCHAR
 
 from app import config

@@ -180,7 +180,8 @@ def _decode_username(token: str) -> str:
     library: no dependency, and no clash with the unrelated 'jwt' PyPI package
     (which shadows PyJWT and has no top-level decode()).
     """
-    import base64, json as _json
+    import base64
+    import json as _json
     # JWT structure: header.payload.signature (all base64url-encoded).
     payload_b64 = token.split(".")[1]
     payload_b64 += "=" * (-len(payload_b64) % 4)  # restore base64url padding

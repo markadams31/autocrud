@@ -191,7 +191,7 @@ def refresh_schema() -> dict:
 
     try:
         snapshot = reflect_schemas()
-    except Exception as e:
+    except Exception:
         logger.exception("Schema refresh failed")
         raise ApiError(
             ErrorCode.INTERNAL_ERROR,

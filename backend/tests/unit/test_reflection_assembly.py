@@ -3,7 +3,7 @@ Column/table assembly: foreign-key wiring, primary-key ordering, the
 implicit-RETURNING opt-out (trigger safety), and the ReflectedSchema container.
 """
 
-from sqlalchemy import Column, ForeignKey, Identity, MetaData, Table
+from sqlalchemy import Column, Identity, MetaData, Table
 from sqlalchemy.dialects.mssql import INTEGER, NVARCHAR
 
 from app.reflection import (

@@ -1,0 +1,106 @@
+# Local git hooks for auto-crud, run via the `pre-commit` framework.
+#
+# One-time setup, from the repo root:
+#   uv tool install pre-commit     # or: pipx install pre-commit / pip install pre-commit
+#   pre-commit install             # wires up BOTH stages (see default_install_hook_types)
+#   pre-commit autoupdate          # pin the published hooks to current releases
+#
+# Run every hook against the whole tree once (the first run will normalise
+# whitespace/EOF across existing files — review and commit that on its own):
+#   pre-commit run --all-files
+#
+# These mirror what .github/workflows/ci.yml already gates on, so failures show
+# up locally instead of after a push. The pre-push tests are path-scoped exactly
+# like ci.yml's `changes` job. Bypass in a pinch with `git commit -n` /
+# `git push --no-verify` (sparingly).
+
+minimum_pre_commit_version: "3.5.0"
+
+# Plain `pre-commit install` then wires up both the commit and push stages.
+default_install_hook_types: [pre-commit, pre-push]
+
+repos:
+  # ── Generic hygiene · cross-platform, no external toolchain ──────────────────
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: '\.md$'              # preserve hard line-breaks in Markdown
+      - id: end-of-file-fixer
+      - id: check-merge-conflict       # block files left with <<<<<<< markers
+      - id: check-added-large-files
+        args: [--maxkb=1024]           # lock files are sizeable; flag anything bigger
+      - id: check-yaml
+      - id: check-json
+        # tsconfig.*.json are JSONC (comments + trailing commas) — not strict JSON.
+        exclude: '(^|/)tsconfig(\..+)?\.json$'
+      - id: detect-private-key         # PEM/SSH keys committed by accident
+
+  # ── Secret / state-file guard · defense in depth over .gitignore ─────────────
+  # .env (real connection strings), *.tfvars and *.tfstate are gitignored, but
+  # this fails loudly if one is ever force-added. *.example / *.sample are fine.
+  - repo: local
+    hooks:
+      - id: forbid-secret-and-state-files
+        name: Refuse to commit .env / *.tfvars / *.tfstate
+        language: fail
+        entry: >-
+          This file holds secrets or Terraform state and must not be committed
+          (it is in .gitignore). Re-run with `git commit -n` only if you are sure.
+        files: '(^|/)\.env($|\.)|\.tfvars$|\.tfstate(\.backup)?$'
+        exclude: '\.(example|sample)$'
+
+  # ── Backend · Python lint ────────────────────────────────────────────────────
+  # ci.yml runs no ruff/mypy, so this is the only thing enforcing Python lint.
+  # Default rule set (pyflakes F + pycodestyle E4/E7/E9) — low-noise, autofixed.
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.20
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+        files: '^backend/.*\.py$'
+      # Formatting rewrites touched files — opt in once you're ready for it:
+      # - id: ruff-format
+      #   files: '^backend/.*\.py$'
+
+  # ── Frontend · lint · mirrors `npm run lint` in ci.yml ───────────────────────
+  - repo: local
+    hooks:
+      - id: oxlint
+        name: oxlint (frontend)
+        language: system
+        entry: npm --prefix frontend run lint
+        files: '^frontend/.*\.(ts|tsx|js|jsx)$'
+        pass_filenames: false          # oxlint reads frontend/.oxlintrc.json itself
+
+  # ── Infra · terraform fmt · mirrors `terraform fmt -check` in ci.yml ─────────
+  # Rewrites in place; pre-commit then fails the run so you re-stage the result.
+  - repo: local
+    hooks:
+      - id: terraform-fmt
+        name: terraform fmt
+        language: system
+        entry: terraform fmt -recursive infra
+        files: '^infra/.*\.tf$'
+        pass_filenames: false
+
+  # ── Pre-push gate · the fast CI tiers, scoped to what changed ────────────────
+  # backend tests run only when a pushed commit touches backend/**; frontend
+  # only when frontend/** — same path filtering ci.yml's `changes` job applies.
+  # Slow tiers (integration/Docker, Playwright, terraform validate) stay in CI.
+  - repo: local
+    hooks:
+      - id: backend-tests
+        name: Backend unit + API tests (pytest, no Docker)
+        language: system
+        entry: uv run --directory backend --extra test pytest -m "not integration"
+        files: '^backend/.*\.py$'
+        pass_filenames: false
+        stages: [pre-push]
+      - id: frontend-unit
+        name: Frontend unit tests (vitest)
+        language: system
+        entry: npm --prefix frontend run test:unit
+        files: '^frontend/'
+        pass_filenames: false
+        stages: [pre-push]
