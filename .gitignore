@@ -39,6 +39,10 @@ infra/**/*.tfvars
 !infra/**/*.tfvars.example
 infra/**/*.tfstate
 infra/**/*.tfstate.backup
+# Lock files are committed for the root configs (the environments) but NOT for the
+# shared module — a lock only appears under modules/ from running `terraform init`
+# there (e.g. the CI validate step) and is a throwaway artifact.
+infra/modules/**/.terraform.lock.hcl
 
 # ── Logs ────────────────────────────────────────────────────────────────────
 *.log

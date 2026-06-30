@@ -9,6 +9,7 @@ on:
 permissions:
   contents: read
   id-token: write # OIDC token is minted under the caller's grant (used by deploy.yml)
+  pull-requests: read # caller must grant what the called ci.yml's change-detection job requests
 
 concurrency:
   # Never cancel an in-flight deploy; just queue the next one.
