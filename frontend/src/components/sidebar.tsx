@@ -13,9 +13,16 @@
 
 import { useState } from 'react'
 import { AnimatePresence, LayoutGroup, motion } from 'motion/react'
-import { ChevronRightIcon, DatabaseZapIcon, TableIcon } from 'lucide-react'
+import { ChevronRightIcon, ChevronsUpDownIcon, DatabaseZapIcon, LogOutIcon, TableIcon } from 'lucide-react'
 
 import { Skeleton } from '@/components/ui/skeleton'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { SettingsMenu } from '@/components/settings-menu'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { useMe, useSchemas, useTables } from '@/hooks/queries'
@@ -36,25 +43,58 @@ function initialsOf(name: string): string {
   return ((parts[0]?.[0] ?? '?') + (parts[1]?.[0] ?? '')).toUpperCase()
 }
 
-/** Footer chip showing the EasyAuth-authenticated user, when one is present. */
+/**
+ * Footer chip for the EasyAuth-authenticated user. It's the account menu: the
+ * chip opens a small menu (upward, since it's pinned to the bottom) that
+ * confirms the identity and offers Sign out. Sign-out is an account action, so
+ * it lives here on the identity — not in the app-settings gear beside it — and
+ * behind a click rather than as a persistent button, matching its low frequency.
+ */
 function UserBadge() {
   const { data: me } = useMe()
   if (!me?.name) return null
   return (
-    <div className="flex items-center gap-2.5 border-t px-3 py-2.5">
-      <div
-        className="flex size-7 shrink-0 items-center justify-center rounded-full bg-sidebar-accent text-[11px] font-semibold text-sidebar-accent-foreground ring-1 ring-sidebar-border"
-        aria-hidden
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <button
+            type="button"
+            aria-label={`Account menu for ${me.name}`}
+            className="flex w-full items-center gap-2.5 border-t px-3 py-2.5 text-left outline-none transition-colors hover:bg-sidebar-accent/40 focus-visible:bg-sidebar-accent/40 data-[popup-open]:bg-sidebar-accent/40"
+          />
+        }
       >
-        {initialsOf(me.name)}
-      </div>
-      <div className="min-w-0 leading-tight">
-        <p className="truncate text-sm font-medium" title={me.name}>
-          {me.name}
-        </p>
-        <p className="text-xs text-sidebar-foreground/50">Signed in</p>
-      </div>
-    </div>
+        <span
+          className="flex size-7 shrink-0 items-center justify-center rounded-full bg-sidebar-accent text-[11px] font-semibold text-sidebar-accent-foreground ring-1 ring-sidebar-border"
+          aria-hidden
+        >
+          {initialsOf(me.name)}
+        </span>
+        <span className="min-w-0 flex-1 leading-tight">
+          <span className="block truncate text-sm font-medium" title={me.name}>
+            {me.name}
+          </span>
+          <span className="block text-xs text-sidebar-foreground/50">Signed in</span>
+        </span>
+        <ChevronsUpDownIcon className="size-3.5 shrink-0 text-sidebar-foreground/40" aria-hidden />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent side="top" align="start" className="min-w-56">
+        <div className="px-1.5 py-1.5">
+          <p className="text-xs text-muted-foreground">Signed in as</p>
+          <p className="truncate text-sm font-medium" title={me.name}>
+            {me.name}
+          </p>
+        </div>
+        <DropdownMenuSeparator />
+        {/* Full-page navigation, not client routing — /.auth/logout is served by
+            App Service EasyAuth: it clears the session + token store and does a
+            server-side Entra sign-out, then lands on /.auth/logout/complete. */}
+        <DropdownMenuItem onClick={() => window.location.assign('/.auth/logout')}>
+          <LogOutIcon />
+          Sign out
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 
