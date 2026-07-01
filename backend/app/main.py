@@ -71,6 +71,7 @@ from app.telemetry import (
 
 instrument_sqlalchemy()
 
+from app import build_info
 from app.connection import reflection_engine, dispose_user_engines
 from app.errors import ApiError, ErrorCode
 from app.middleware import (
@@ -221,6 +222,9 @@ async def lifespan(app: FastAPI):
     # produces one access line, not two, and log volume halves.
     logging.getLogger("uvicorn.access").disabled = True
 
+    # Stamp which build this is into the log stream, so every exported AppTraces
+    # run self-identifies the commit + build time it came from (see app.build_info).
+    logger.info("Running build: sha=%s built=%s", build_info.BUILD_SHA, build_info.BUILD_TIME)
     logger.info("Starting up — reflecting database schema...")
     snapshot = reflect_schemas()
     set_snapshot(snapshot)

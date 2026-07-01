@@ -89,6 +89,14 @@ export interface SchemaList {
   schemas: string[]
 }
 
+/** GET /version — the running backend build (app/build_info.py). */
+export interface BuildInfo {
+  /** Commit SHA the image was built from; "dev" outside a CI-built image. */
+  sha: string
+  /** UTC build timestamp (ISO 8601); "dev" outside a CI-built image. */
+  time: string
+}
+
 /** A FK dropdown option, from meta.py::get_options. */
 export interface FieldOption {
   value: string | number
