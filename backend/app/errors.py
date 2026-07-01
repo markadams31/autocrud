@@ -257,19 +257,95 @@ def _constraint_columns(sa_table: object) -> dict[str, list[str]]:
     return out
 
 
+def _parens_balanced(s: str) -> bool:
+    """True if every '(' in `s` is matched by a later ')'. Used to only unwrap an
+    outer paren pair that actually wraps the whole expression."""
+    depth = 0
+    for ch in s:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth < 0:
+                return False
+    return depth == 0
+
+
+def _humanize_check_expression(sqltext: str) -> str:
+    """
+    Turn SQL Server's stored CHECK text into something an end user can read: strip
+    the [bracket] quoting around identifiers, unwrap the parentheses SQL Server puts
+    around literals and the whole expression, and normalise operator spacing.
+
+        "([PercentComplete]>=(0) AND [PercentComplete]<=(100))"
+            -> "PercentComplete >= 0 AND PercentComplete <= 100"
+
+    Purely cosmetic and best-effort — an expression it can't simplify is still
+    returned, just less tidy. Never raises.
+    """
+    expr = (sqltext or "").strip()
+    # Unwrap redundant outer paren pairs that wrap the entire expression.
+    while expr.startswith("(") and expr.endswith(")") and _parens_balanced(expr[1:-1]):
+        expr = expr[1:-1].strip()
+    # Drop the [] quoting SQL Server puts around identifiers.
+    expr = re.sub(r"\[([^\]]+)\]", r"\1", expr)
+    # Unwrap parenthesised literals: (0) -> 0, (-1) -> -1, (1.5) -> 1.5, ('x') -> 'x'.
+    expr = re.sub(r"\((-?\d+(?:\.\d+)?|N?'[^']*')\)", r"\1", expr)
+    # Normalise spacing around the common comparison operators (multi-char first so
+    # ">=" isn't split into ">" "=").
+    expr = re.sub(r"\s*(<=|>=|<>|!=|=|<|>)\s*", r" \1 ", expr)
+    # Collapse any whitespace the steps above introduced.
+    return re.sub(r"\s+", " ", expr).strip()
+
+
+def _check_constraint_expressions(sa_table: object) -> dict[str, str]:
+    """
+    Map each named CHECK constraint on a reflected table to a human-readable form
+    of its rule, so a violation can tell the user *what* rule failed, not just its
+    name. A CheckConstraint is recognised the same way _constraint_columns does it
+    — by carrying a non-None `sqltext` — to avoid importing the class.
+
+    Best-effort and never raises. The expression text needs VIEW DEFINITION at
+    reflection time (the deployment grants it to the reflection identity); where it
+    wasn't held, `sqltext` is empty and the constraint is simply omitted, so the
+    caller degrades to naming the rule rather than quoting it.
+    """
+    out: dict[str, str] = {}
+    if sa_table is None:
+        return out
+    try:
+        for constraint in getattr(sa_table, "constraints", ()) or ():
+            name = getattr(constraint, "name", None)
+            sqltext = getattr(constraint, "sqltext", None)
+            if not name or sqltext is None:
+                continue
+            human = _humanize_check_expression(str(sqltext))
+            if human:
+                out[str(name)] = human
+    except Exception:
+        pass
+    return out
+
+
 def friendly_constraint_violation(
     text: str,
     columns_by_constraint: Optional[dict[str, list[str]]] = None,
+    checks_by_constraint: Optional[dict[str, str]] = None,
 ) -> Optional[tuple[str, Optional[dict[str, str]]]]:
     """
     Read a precise (message, fields) pair out of a SQL Server constraint-violation
     message. `columns_by_constraint` (from _constraint_columns) lets a unique/FK
     violation name the exact form field, since the raw message only names the
-    referenced side. Returns None when nothing recognisable matches, so the caller
-    falls back to the generic message.
+    referenced side. `checks_by_constraint` (from _check_constraint_expressions)
+    lets a CHECK violation quote the actual rule instead of only its name. Returns
+    None when nothing recognisable matches, so the caller falls back to the generic
+    message.
     """
     def cols_of(name):
         return (columns_by_constraint or {}).get(name) or []
+
+    def rule_of(name):
+        return (checks_by_constraint or {}).get(name)
 
     m = _DUP_KEY_RE.search(text)
     if m:
@@ -288,6 +364,18 @@ def friendly_constraint_violation(
         # SQL Server's CHECK message rarely names the column, so fall back to the
         # column(s) recovered from the constraint's expression (see _constraint_columns).
         cols = [m.group(2)] if m.group(2) else cols_of(constraint)
+        rule = rule_of(constraint)
+        # When we have the reflected expression, quote the rule itself — far more
+        # actionable than a constraint name the user has never seen. Otherwise name
+        # the rule (the pre-existing behaviour) so it still degrades cleanly.
+        if rule:
+            if len(cols) == 1:
+                return (f"'{cols[0]}' must satisfy: {rule}.",
+                        {cols[0]: f"Must satisfy: {rule}."})
+            if len(cols) > 1:
+                return (f"These values must satisfy the rule ({', '.join(cols)}): {rule}.",
+                        {c: f"Must satisfy: {rule}." for c in cols})
+            return (f"A value must satisfy the rule: {rule}.", None)
         if len(cols) == 1:
             return (f"'{cols[0]}' is not allowed by validation rule {constraint}.",
                     {cols[0]: f"Not allowed by {constraint}."})
@@ -418,7 +506,11 @@ def map_database_exception(exc: Exception, sa_table: object = None) -> ApiError:
         # string truncation / numeric overflow that Pydantic doesn't bound
         # (DataError). A clean 409. Read a precise reason where we can.
         try:
-            detail = friendly_constraint_violation(text, _constraint_columns(sa_table))
+            detail = friendly_constraint_violation(
+                text,
+                _constraint_columns(sa_table),
+                _check_constraint_expressions(sa_table),
+            )
         except Exception:
             detail = None
         if detail is not None:
