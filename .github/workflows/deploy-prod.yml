@@ -1,18 +1,34 @@
 name: Deploy · prod
 
-# Production ships on a published GitHub Release (or a manual run). The `prod`
-# environment (set in the reusable deploy.yml) carries a required-reviewer rule,
-# so GitHub pauses for approval before the deploy job runs.
+# Production PROMOTES the exact artifact already built + tested on dev — it never
+# rebuilds. On a published release (or a manual run): CI gate → resolve the
+# release commit's image digest and VERIFY its SLSA + SBOM attestations → deploy
+# that digest (deploy.yml), with auto-rollback on a failed smoke check.
+#
+# NOTE — not yet exercised. The `prod` GitHub Environment (ACR_NAME / APP_NAME /
+# RESOURCE_GROUP + AZURE_* secrets) isn't provisioned yet, and prod will have its
+# OWN registry. The tested artifact is built in dev's ACR, so to promote the SAME
+# digest across registries, add a digest-preserving import before the resolve
+# step below:
+#   az acr import --name <prod-acr> \
+#     --source <dev-acr>.azurecr.io/autocrud@<digest> --image autocrud@<digest>
+# (import preserves the digest, so the attestation still verifies). Wire that in
+# when prod is stood up.
 on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      image_ref:
+        description: Existing image ref to redeploy/rollback (blank = promote the release/HEAD commit).
+        required: false
+        type: string
 
 permissions:
   contents: read
-  id-token: write # OIDC token is minted under the caller's grant (used by deploy.yml)
-  attestations: write # SBOM + SLSA provenance attestations (written in deploy.yml)
-  pull-requests: read # caller must grant what the called ci.yml's change-detection job requests
+  id-token: write # OIDC (azure/login), used by the called workflows
+  attestations: read # gh attestation verify
+  pull-requests: read # ci.yml's change-detection job
 
 concurrency:
   group: deploy-prod
@@ -23,13 +39,60 @@ jobs:
     name: CI gate
     uses: ./.github/workflows/ci.yml
 
+  resolve:
+    name: Resolve + verify artifact
+    needs: ci
+    # Skip on a manual rollback to an already-built ref.
+    if: ${{ github.event_name == 'release' || inputs.image_ref == '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: prod
+    permissions:
+      id-token: write
+      contents: read
+      attestations: read
+    outputs:
+      ref: ${{ steps.resolve.outputs.ref }}
+    env:
+      ACR_NAME: ${{ vars.ACR_NAME }}
+    steps:
+      - name: Azure login (OIDC)
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Log in to ACR
+        run: az acr login --name "$ACR_NAME"
+      # The release tag points at a commit already built on merge as
+      # autocrud:<sha>. Resolve its immutable digest; fail loudly if there's no
+      # tested artifact for it (i.e. it never went through the main build).
+      - name: Resolve digest of the release commit
+        id: resolve
+        run: |
+          login_server=$(az acr show --name "$ACR_NAME" --query loginServer -o tsv)
+          digest=$(az acr repository show \
+            --name "$ACR_NAME" --image "autocrud:${{ github.sha }}" \
+            --query digest -o tsv) || {
+              echo "::error::No tested artifact for ${{ github.sha }} in $ACR_NAME — was it built on merge to main?"
+              exit 1
+            }
+          echo "ref=$login_server/autocrud@$digest" >> "$GITHUB_OUTPUT"
+          echo "Promoting $login_server/autocrud@$digest"
+      # Provenance gate: only promote an image whose SLSA + SBOM attestations
+      # verify against this repository.
+      - name: Verify attestations
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh attestation verify "oci://${{ steps.resolve.outputs.ref }}" --owner "${{ github.repository_owner }}"
+
   deploy:
     name: Deploy
-    needs: ci
+    needs: [ci, resolve]
+    if: ${{ always() && needs.ci.result == 'success' && (needs.resolve.result == 'success' || needs.resolve.result == 'skipped') }}
     uses: ./.github/workflows/deploy.yml
     with:
       environment: prod
-      # Release tag identifies a release build; fall back to the SHA for a
-      # manual (workflow_dispatch) run.
-      image_tag: ${{ github.event.release.tag_name || github.sha }}
+      image_ref: ${{ inputs.image_ref != '' && inputs.image_ref || needs.resolve.outputs.ref }}
+      expect_sha: ${{ inputs.image_ref != '' && '' || github.sha }}
     secrets: inherit

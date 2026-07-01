@@ -1,0 +1,148 @@
+name: Build image (reusable)
+
+# Builds the container image ONCE and produces the single tested artifact that an
+# environment deploys and that prod later promotes *by digest* — so what ships is
+# byte-for-byte what was scanned and signed. Called by deploy-dev.yml on merge to
+# main. Everything below binds to the immutable digest, never a moveable tag.
+#
+# Order is deliberate: build → resolve digest → SCAN (gate) → attest. We never
+# sign/attest — or let anything deploy — an image that fails the vulnerability
+# gate.
+#
+# The caller must pass `secrets: inherit` (for the environment's AZURE_* + vars)
+# and grant id-token: write (OIDC + Sigstore) and attestations: write.
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: GitHub Environment whose ACR to build into.
+        required: true
+        type: string
+    outputs:
+      ref:
+        description: Full immutable image reference (registry/autocrud@sha256:...).
+        value: ${{ jobs.build.outputs.ref }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build + scan + attest
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: ${{ inputs.environment }}
+    permissions:
+      id-token: write # OIDC for azure/login + Sigstore keyless signing
+      contents: read
+      attestations: write # SLSA provenance + SBOM attestations
+      security-events: write # upload trivy SARIF to code scanning
+    outputs:
+      ref: ${{ steps.image.outputs.ref }}
+    env:
+      ACR_NAME: ${{ vars.ACR_NAME }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Azure login (OIDC)
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # Resolve the registry and log docker into it (build-push, trivy, and syft
+      # all use these creds).
+      - name: Resolve registry
+        id: reg
+        run: |
+          login_server=$(az acr show --name "$ACR_NAME" --query loginServer -o tsv)
+          az acr login --name "$ACR_NAME"
+          echo "server=$login_server" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
+      - name: Build metadata
+        id: meta
+        run: echo "built=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      # Build + push on the runner with a persistent REGISTRY layer cache, so only
+      # the source layers rebuild after the first run (~35s vs ~130s for a
+      # cacheless `az acr build`). provenance/sbom are disabled here — we attest
+      # separately below against a clean single-arch manifest digest — so GitHub
+      # attests the exact image it just built, not an ACR-side artifact after the
+      # fact. The Dockerfile installs deps before source and declares
+      # GIT_SHA/BUILD_TIME last, so those layers cache-hit every run.
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          push: true
+          provenance: false
+          sbom: false
+          tags: |
+            ${{ steps.reg.outputs.server }}/autocrud:${{ github.sha }}
+            ${{ steps.reg.outputs.server }}/autocrud:latest
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            BUILD_TIME=${{ steps.meta.outputs.built }}
+          cache-from: type=registry,ref=${{ steps.reg.outputs.server }}/autocrud:buildcache
+          cache-to: type=registry,ref=${{ steps.reg.outputs.server }}/autocrud:buildcache,mode=max
+
+      # Bind everything below to the immutable digest build-push just returned.
+      - name: Image reference
+        id: image
+        run: |
+          echo "image=${{ steps.reg.outputs.server }}/autocrud" >> "$GITHUB_OUTPUT"
+          echo "digest=${{ steps.build.outputs.digest }}" >> "$GITHUB_OUTPUT"
+          echo "ref=${{ steps.reg.outputs.server }}/autocrud@${{ steps.build.outputs.digest }}" >> "$GITHUB_OUTPUT"
+          echo "Built ${{ steps.reg.outputs.server }}/autocrud@${{ steps.build.outputs.digest }}"
+
+      # GATE: scan the exact digest that will ship. Fail on FIXABLE High/Critical
+      # (unpatched base-image CVEs are reported to the Security tab but don't block
+      # — you can't fix what has no patch). Runs before attestation, so a failing
+      # image is never signed or deployed.
+      - name: Install trivy
+        env:
+          TRIVY_VERSION: 0.72.0
+        run: |
+          curl -fsSL -o trivy.tar.gz \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          tar -xzf trivy.tar.gz trivy
+      - name: Scan image (gate)
+        run: >-
+          ./trivy image --ignore-unfixed --severity HIGH,CRITICAL
+          --format sarif --output trivy.sarif --exit-code 1
+          "${{ steps.image.outputs.ref }}"
+      - name: Upload trivy SARIF
+        if: ${{ !cancelled() }}
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
+        with:
+          sarif_file: trivy.sarif
+          category: trivy-image
+
+      # SBOM + signed SLSA provenance + SBOM attestation, all bound to the digest.
+      # Verified before prod promote (see deploy-prod.yml).
+      - name: Generate SBOM (SPDX)
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: ${{ steps.image.outputs.ref }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+          upload-artifact: true
+          artifact-name: sbom-${{ github.sha }}.spdx.json
+      - name: Attest build provenance (SLSA)
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-name: ${{ steps.image.outputs.image }}
+          subject-digest: ${{ steps.image.outputs.digest }}
+      - name: Attest SBOM
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-name: ${{ steps.image.outputs.image }}
+          subject-digest: ${{ steps.image.outputs.digest }}
+          sbom-path: sbom.spdx.json

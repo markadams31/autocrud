@@ -13,11 +13,14 @@
 # up locally instead of after a push. The pre-push tests are path-scoped exactly
 # like ci.yml's `changes` job. Bypass in a pinch with `git commit -n` /
 # `git push --no-verify` (sparingly).
+#
+# `language: system` hooks call locally-installed tools; you'll need node/npm,
+# terraform, gitleaks, and actionlint on PATH (each hook notes how to install it).
 
 minimum_pre_commit_version: "3.5.0"
 
-# Plain `pre-commit install` then wires up both the commit and push stages.
-default_install_hook_types: [pre-commit, pre-push]
+# `pre-commit install` wires up all three stages used below.
+default_install_hook_types: [pre-commit, commit-msg, pre-push]
 
 repos:
   # ── Generic hygiene · cross-platform, no external toolchain ──────────────────
@@ -36,6 +39,15 @@ repos:
         exclude: '(^|/)tsconfig(\..+)?\.json$'
       - id: detect-private-key         # PEM/SSH keys committed by accident
 
+  # ── Commit message · Conventional Commits (commit-msg stage) ─────────────────
+  # Enforces the fix:/feat:/ci:/... convention the project already follows, so the
+  # history stays consistent and amenable to changelog automation later.
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v4.4.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]
+
   # ── Secret / state-file guard · defense in depth over .gitignore ─────────────
   # .env (real connection strings), *.tfvars and *.tfstate are gitignored, but
   # this fails loudly if one is ever force-added. *.example / *.sample are fine.
@@ -51,12 +63,18 @@ repos:
         exclude: '\.(example|sample)$'
 
   # ── Secret scanning · gitleaks · keys / tokens / connection strings ──────────
-  # Scans staged changes so a secret never lands in a commit. The Security
-  # workflow (.github/workflows/security.yml) re-scans full history as the backstop.
-  - repo: https://github.com/gitleaks/gitleaks
-    rev: v8.18.4
+  # Scans staged changes so a secret never lands in a commit. Uses a locally
+  # installed gitleaks binary (like the oxlint/terraform hooks) — no Go build on
+  # first run. Install: `brew install gitleaks` / `scoop install gitleaks` / a
+  # release from github.com/gitleaks/gitleaks. The Security workflow re-scans full
+  # history in CI as the backstop.
+  - repo: local
     hooks:
       - id: gitleaks
+        name: gitleaks (staged secrets)
+        language: system
+        entry: gitleaks git --staged --redact
+        pass_filenames: false
 
   # ── Backend · Python lint ────────────────────────────────────────────────────
   # ci.yml runs no ruff/mypy, so this is the only thing enforcing Python lint.
@@ -101,6 +119,18 @@ repos:
         entry: terraform fmt -recursive infra
         files: '^infra/.*\.tf$'
         pass_filenames: false
+
+  # ── CI · actionlint · mirrors the Actionlint job in ci.yml ───────────────────
+  # Lints workflow YAML (and the shell in `run:` blocks via shellcheck) locally.
+  # Uses an installed actionlint binary — install: `brew install actionlint` / a
+  # release from github.com/rhysd/actionlint.
+  - repo: local
+    hooks:
+      - id: actionlint
+        name: actionlint (workflows)
+        language: system
+        entry: actionlint
+        files: '^\.github/workflows/.*\.ya?ml$'
 
   # ── Pre-push gate · the fast CI tiers, scoped to what changed ────────────────
   # backend tests run only when a pushed commit touches backend/**; frontend
