@@ -69,6 +69,12 @@ target-version = "py313"
 # build engines/routes, so those imports are deliberately not at the top of file.
 "app/main.py" = ["E402"]
 
+# bandit (Python SAST) — used by the pre-commit hook and the Security workflow.
+# Scan app/ only; tests use asserts and fixtures bandit would otherwise flag.
+# Reviewed findings are annotated inline with `# nosec`.
+[tool.bandit]
+exclude_dirs = ["tests"]
+
 [tool.setuptools.packages.find]
 # Auto-discovers app/ and app/routes/ — no manual listing needed.
 # run.py and dev_auth_proxy.py are entry points, not importable modules,
