@@ -144,6 +144,13 @@ class BulkUpdateRequest(BaseModel):
 
 _MAX_PAGE_SIZE = 500
 
+# Cap the number of values an `in` filter may carry. SQL Server allows at most
+# ~2100 parameters per statement, so an unbounded `in` list overruns that limit
+# and surfaces as an opaque 500. Bound it well under the ceiling — leaving room
+# for the query's other bound parameters — and reject an over-cap list with a
+# clean 400 instead. (Matches BULK_MAX_ROWS in spirit: an explicit, safe cap.)
+_MAX_IN_VALUES = 1000
+
 
 # Operators that compare against the column with a Python comparison operator.
 _COMPARATORS = {
@@ -214,7 +221,12 @@ def _pk_filter(table: TableInfo, pk_str: str):
     """
     t = table.sa_table
     pk_cols = list(t.primary_key.columns)
-    values  = pk_str.split(",")
+    # A single-column PK is taken whole and never split, so a natural key whose
+    # value legitimately contains a comma (e.g. a code "A,B") still addresses
+    # correctly. Only composite keys are comma-separated (one value per PK column,
+    # in order); a composite value that itself contains a comma is an inherent
+    # ambiguity we don't try to resolve.
+    values = [pk_str] if len(pk_cols) == 1 else pk_str.split(",")
 
     if len(values) != len(pk_cols):
         raise ApiError(
@@ -234,11 +246,21 @@ def _pk_filter(table: TableInfo, pk_str: str):
 
 
 def _escape_like(term: str) -> str:
-    """Escape LIKE wildcards so a user's text is matched literally (escape='\\')."""
+    """
+    Escape LIKE wildcards so a user's text is matched literally (escape='\\').
+
+    T-SQL LIKE treats %, _, and [ as metacharacters. A lone ] is literal, and
+    ^ / - / ] are only special *inside* a [...] class — so escaping [ closes the
+    whole class grammar and the rest fall out as literals. Without escaping [, a
+    search for "[a]" becomes a character class matching a single "a" (over-match).
+    The escape character itself (\\) must be escaped first so it can't consume the
+    backslashes we add below.
+    """
     return (
         term.replace("\\", "\\\\")
         .replace("%", "\\%")
         .replace("_", "\\_")
+        .replace("[", "\\[")
     )
 
 
@@ -278,6 +300,21 @@ def _is_likeable_column(sa_col) -> bool:
     return "XML" not in type(sa_col.type).__name__.upper()
 
 
+def _in_clause(sa_col, values: list):
+    """
+    Build an `IN (...)` clause, rejecting an over-cap list with a clean 400.
+
+    Guards the SQL Server ~2100-parameter limit: a huge `in` list would otherwise
+    reach the driver and fail as an opaque 500. See _MAX_IN_VALUES.
+    """
+    if len(values) > _MAX_IN_VALUES:
+        raise ApiError(
+            ErrorCode.BAD_REQUEST,
+            f"An 'in' filter accepts at most {_MAX_IN_VALUES} values; got {len(values)}.",
+        )
+    return sa_col.in_(values)
+
+
 def _filter_clause(sa_col, raw):
     """
     Build a WHERE clause for one column filter, or return None to skip it.
@@ -303,7 +340,7 @@ def _filter_clause(sa_col, raw):
     if not isinstance(raw, dict):
         _require_comparable(sa_col)
         if isinstance(raw, list):
-            return sa_col.in_(raw) if raw else sa_col.in_([None])
+            return _in_clause(sa_col, raw) if raw else sa_col.in_([None])
         return sa_col == raw
 
     op  = raw.get("op", "eq")
@@ -328,7 +365,7 @@ def _filter_clause(sa_col, raw):
         return sa_col.between(low, high)
 
     if op == "in":
-        return sa_col.in_(val) if isinstance(val, list) and val else None
+        return _in_clause(sa_col, val) if isinstance(val, list) and val else None
 
     if op in _LIKE_PATTERNS:
         if val is None or val == "":
