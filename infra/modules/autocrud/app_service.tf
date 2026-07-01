@@ -102,18 +102,12 @@ resource "azurerm_linux_web_app" "main" {
     APPINSIGHTS_SAMPLING_RATIO                 = tostring(var.appinsights_sampling_ratio)
     ApplicationInsightsAgent_EXTENSION_VERSION = "~3"
 
-    # EasyAuth confidential-client credential.
-    #
-    # ACTIVE — the app's user-assigned identity, used as a federated credential
-    # (entra.tf) so EasyAuth authenticates its code exchange with a managed
-    # identity instead of a secret. App Service treats this specific setting name
-    # specially; auth_settings_v2.client_secret_setting_name points at it below.
+    # EasyAuth confidential-client credential — the app's user-assigned identity,
+    # used as a federated credential (entra.tf) so EasyAuth authenticates its code
+    # exchange with a managed identity, no client secret. App Service treats this
+    # specific setting name specially; auth_settings_v2.client_secret_setting_name
+    # points at it below.
     OVERRIDE_USE_MI_FIC_ASSERTION_CLIENTID = azurerm_user_assigned_identity.easyauth.client_id
-
-    # DORMANT — the old client secret, retained one release as an instant
-    # rollback (flip client_secret_setting_name back to this name). Remove in a
-    # follow-up once the managed-identity login is confirmed on dev. See entra.tf.
-    MICROSOFT_PROVIDER_AUTHENTICATION_SECRET = azuread_application_password.easyauth.value
   }
 
   # ---------------------------------------------------------------------------
