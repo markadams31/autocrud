@@ -15,6 +15,7 @@ from sqlalchemy.dialects.mssql import (
     TIMESTAMP, TINYINT, UNIQUEIDENTIFIER, VARBINARY, VARCHAR, XML,
 )
 
+from app.mssql_types import VECTOR
 from app.reflection import (
     ColumnKind,
     _classify,
@@ -51,13 +52,25 @@ def test_plain_types_are_editable(sa_type):
 
 
 # ── Types unsafe to write → EXCLUDED ─────────────────────────────────────────
+# VECTOR is registered for reflection in app.mssql_types, so once reflected it is
+# a real type and classifies EXCLUDED by isinstance — same path as binary/XML.
+# A raw embedding isn't hand-editable through a generic layer, so it's read-only.
 
-EXCLUDED_TYPES = [VARBINARY(), BINARY(), IMAGE(), TIMESTAMP(), XML(), SQL_VARIANT()]
+EXCLUDED_TYPES = [VARBINARY(), BINARY(), IMAGE(), TIMESTAMP(), XML(), SQL_VARIANT(), VECTOR()]
 
 
 @pytest.mark.parametrize("sa_type", EXCLUDED_TYPES, ids=lambda t: type(t).__name__)
 def test_unsupported_types_are_excluded(sa_type):
     col = make_column("Field", sa_type)
+    assert _classify(col, set()) is ColumnKind.EXCLUDED
+
+
+# ── VECTOR precedence: EXCLUDED even when named like an audit column ──────────
+
+def test_vector_exclusion_wins_over_audit_name():
+    # EXCLUDED (by type) must beat the name-based DB_OWNED path — a VECTOR named
+    # like an audit column is still read-only, not database-owned-but-editable.
+    col = make_column("CreatedBy", VECTOR())
     assert _classify(col, set()) is ColumnKind.EXCLUDED
 
 
