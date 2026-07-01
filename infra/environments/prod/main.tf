@@ -16,6 +16,11 @@ module "autocrud" {
   # Auto-pause in prod
   sql_auto_pause_delay_minutes = 30
 
+  # Prod keeps the module defaults for these:
+  #   health_check_database      = true   (full /health DB readiness probe)
+  #   sql_admin_include_deployer = false  (DBAs are added to the SQL admins
+  #                                        group out of band, not the CI deployer)
+
   # Uncomment to override other defaults:
   # app_name         = "autocrud"
   # location         = "australiaeast"
@@ -45,3 +50,4 @@ output "_5_deploy_command" { value = module.autocrud.deploy_command }
 # Identifiers — sort alphabetically, below the numbered commands.
 output "app_service_url" { value = module.autocrud.app_service_url }
 output "app_users_group_name" { value = module.autocrud.app_users_group_name }
+output "sql_admins_group_name" { value = module.autocrud.sql_admins_group_name }

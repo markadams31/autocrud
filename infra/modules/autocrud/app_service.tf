@@ -4,6 +4,7 @@ resource "azurerm_service_plan" "main" {
   location            = azurerm_resource_group.main.location
   os_type             = "Linux"
   sku_name            = var.app_service_sku
+  tags                = local.common_tags
 }
 
 # ---------------------------------------------------------------------------
@@ -21,6 +22,7 @@ resource "azurerm_user_assigned_identity" "easyauth" {
   name                = module.naming.user_assigned_identity.name
   resource_group_name = azurerm_resource_group.main.name
   location            = azurerm_resource_group.main.location
+  tags                = local.common_tags
 }
 
 resource "azurerm_linux_web_app" "main" {
@@ -29,6 +31,7 @@ resource "azurerm_linux_web_app" "main" {
   location            = azurerm_resource_group.main.location
   service_plan_id     = azurerm_service_plan.main.id
   https_only          = true
+  tags                = local.common_tags
 
   # System-assigned identity: ACR pull (role assignment below) and schema
   # reflection to Azure SQL (connection.py DefaultAzureCredential). Its
@@ -43,6 +46,14 @@ resource "azurerm_linux_web_app" "main" {
 
   site_config {
     always_on = true
+
+    # Reject TLS below 1.2 and turn off the FTP/FTPS publishing endpoint — the
+    # image is deployed by managed-identity ACR pull (site_config above) and the
+    # pipeline's `az webapp config container set`, never FTP, so the deployment
+    # surface stays closed. minimum_tls_version defaults to 1.2 on this provider
+    # already; set explicitly so the posture is legible as compliance evidence.
+    minimum_tls_version = "1.2"
+    ftps_state          = "Disabled"
 
     # Route App Service's health probe to the app's /health readiness endpoint so
     # an instance that can't serve (startup reflection failed, or the database is
@@ -96,11 +107,18 @@ resource "azurerm_linux_web_app" "main" {
 
     WEBSITES_PORT = "8000"
 
-    # Application Insights
-    APPINSIGHTS_INSTRUMENTATIONKEY             = azurerm_application_insights.main.instrumentation_key
-    APPLICATIONINSIGHTS_CONNECTION_STRING      = azurerm_application_insights.main.connection_string
-    APPINSIGHTS_SAMPLING_RATIO                 = tostring(var.appinsights_sampling_ratio)
-    ApplicationInsightsAgent_EXTENSION_VERSION = "~3"
+    # Full readiness probe (live DB round-trip) vs snapshot-only liveness. Set
+    # false where the database is serverless with auto-pause, so the frequent
+    # health probe doesn't keep it awake — see routes/admin.py and config.py.
+    HEALTH_CHECK_DATABASE = var.health_check_database ? "true" : "false"
+
+    # Application Insights. The app self-instruments via the azure-monitor-
+    # opentelemetry distro (telemetry.py), which reads ONLY the connection
+    # string. The legacy APPINSIGHTS_INSTRUMENTATIONKEY and the codeless
+    # ApplicationInsightsAgent_EXTENSION_VERSION agent (not supported for custom
+    # containers anyway) are deliberately omitted — connection string throughout.
+    APPLICATIONINSIGHTS_CONNECTION_STRING = azurerm_application_insights.main.connection_string
+    APPINSIGHTS_SAMPLING_RATIO            = tostring(var.appinsights_sampling_ratio)
 
     # EasyAuth confidential-client credential — the app's user-assigned identity,
     # used as a federated credential (entra.tf) so EasyAuth authenticates its code

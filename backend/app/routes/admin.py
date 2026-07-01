@@ -44,6 +44,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import text
 
 from app import build_info, telemetry
+from app.config import HEALTH_CHECK_DATABASE
 from app.connection import reflection_engine
 from app.errors import ApiError, ErrorCode
 from app.reflection import reflect_schemas
@@ -72,6 +73,12 @@ router = APIRouter(tags=["admin"])
 # Caveat: SQL is a shared dependency, so an outage marks every instance
 # unhealthy at once — App Service keeps the last instance rather than pulling
 # the whole site, and the signal surfaces the real problem in monitoring.
+#
+# The round-trip is skipped entirely when HEALTH_CHECK_DATABASE is false (see
+# config.py): /health then reports on the snapshot alone (liveness). That exists
+# for a serverless auto-pausing database — probing it every ~minute would keep it
+# awake and never let it pause. The trade is an accepted cold start on the next
+# real request; enabled (the default) everywhere the database isn't auto-pausing.
 # ---------------------------------------------------------------------------
 
 _DB_CHECK_TTL_SECONDS = 10.0
@@ -83,7 +90,13 @@ def database_is_reachable() -> bool:
     """
     True if a trivial `SELECT 1` succeeds on the managed-identity engine, cached
     for _DB_CHECK_TTL_SECONDS. A FastAPI dependency so tests can override it.
+
+    Short-circuits to True (no round-trip) when HEALTH_CHECK_DATABASE is false,
+    so the frequent probe doesn't keep a serverless auto-pausing database awake.
     """
+    if not HEALTH_CHECK_DATABASE:
+        return True
+
     global _db_check_cache
     now = time.monotonic()
     with _db_check_lock:
@@ -165,7 +178,9 @@ def health(db_reachable: bool = Depends(database_is_reachable)) -> dict:
     running, the schema snapshot is loaded, AND the database is reachable.
     Returns 503 if the snapshot is missing (startup still in progress or failed)
     or if the database can't be reached — so App Service stops routing traffic
-    to an instance that can't actually serve data.
+    to an instance that can't actually serve data. When HEALTH_CHECK_DATABASE is
+    false the database round-trip is skipped (see database_is_reachable) and this
+    reports on the snapshot alone.
 
     Also echoes the running build's commit SHA (see app.build_info). /health is
     anonymous, so the deploy pipeline's smoke check can poll it to confirm the

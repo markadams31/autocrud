@@ -7,4 +7,6 @@ resource "azurerm_container_registry" "main" {
   # Admin credentials disabled — the App Service pulls using its managed identity
   # via the AcrPull role assignment in app_service.tf.
   admin_enabled = false
+
+  tags = local.common_tags
 }

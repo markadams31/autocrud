@@ -120,3 +120,27 @@ resource "azuread_app_role_assignment" "app_users" {
   principal_object_id = azuread_group.app_users.object_id
   resource_object_id  = azuread_service_principal.main.object_id
 }
+
+# ---------------------------------------------------------------------------
+# SQL administrators group
+#
+# Set as the Entra admin on the SQL Server (sql.tf) instead of a single user, so
+# administration is decoupled from whoever last ran `terraform apply` — add DBAs
+# to this group rather than flipping the server's admin between individuals.
+#
+# For a local dev apply, the deployer is added as a member (gated on
+# var.sql_admin_include_deployer) so they inherit SQL admin and can run the
+# contained-user provisioner (sql.tf). In CI/prod leave it false and manage
+# membership out of band.
+# ---------------------------------------------------------------------------
+resource "azuread_group" "sql_admins" {
+  display_name     = "${var.app_name}-${var.environment}-sql-admins"
+  security_enabled = true
+  mail_enabled     = false
+}
+
+resource "azuread_group_member" "sql_admin_deployer" {
+  count            = var.sql_admin_include_deployer ? 1 : 0
+  group_object_id  = azuread_group.sql_admins.object_id
+  member_object_id = data.azurerm_client_config.current.object_id
+}

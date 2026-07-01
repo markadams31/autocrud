@@ -66,6 +66,16 @@ class Settings(BaseSettings):
             return v
         return value
 
+    # Whether /health performs a live database round-trip (a full readiness
+    # check) or only verifies the in-memory schema snapshot is loaded (a pure
+    # liveness check). Default True — the safe choice, so a forgotten setting
+    # keeps the readiness signal intact. Set False where the database is
+    # serverless with auto-pause: the App Service health probe hits /health every
+    # ~minute, and a DB round-trip on each would keep the database awake and burn
+    # its compute allowance so it never pauses. False lets it pause when idle,
+    # trading a possible cold start on the next real request for the saving.
+    health_check_database: bool = Field(default=True)
+
     # Hard ceiling on how many rows a single bulk operation may touch. Bulk
     # writes run inside one transaction (all-or-nothing); this cap keeps that
     # transaction from holding locks / growing the log without bound on a
@@ -128,3 +138,4 @@ DB_SCHEMAS:       list[str] = _settings.db_schemas
 DB_AUDIT_COLUMNS: set[str]  = _settings.db_audit_columns
 BULK_MAX_ROWS:    int       = _settings.bulk_max_rows
 LOG_USER_IDENTITY: str      = _settings.log_user_identity
+HEALTH_CHECK_DATABASE: bool = _settings.health_check_database

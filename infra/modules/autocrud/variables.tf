@@ -19,6 +19,12 @@ variable "location" {
   default     = "australiaeast"
 }
 
+variable "tags" {
+  type        = map(string)
+  description = "Extra tags merged onto every taggable resource, on top of the module's Application/Environment/ManagedBy baseline. Use for estate-wide governance tags (Owner, CostCenter, DataClassification, …). Caller keys win on collision."
+  default     = {}
+}
+
 variable "tenant_id" {
   type        = string
   description = "Entra ID (Azure AD) tenant ID."
@@ -101,6 +107,12 @@ variable "bulk_max_rows" {
   }
 }
 
+variable "health_check_database" {
+  type        = bool
+  description = "Whether /health performs a live database round-trip (full readiness) or only checks the in-memory schema snapshot (liveness). Default true. Set false for a serverless auto-pausing database: the ~1/min health probe would otherwise keep it awake and burn its compute allowance, never letting it pause."
+  default     = true
+}
+
 # ---------------------------------------------------------------------------
 # SKUs — configurable so dev and prod can use different tiers
 # ---------------------------------------------------------------------------
@@ -133,6 +145,22 @@ variable "sql_auto_pause_delay_minutes" {
   type        = number
   description = "Auto-pause delay in minutes for serverless databases. -1 disables auto-pause. Ignored for non-serverless SKUs."
   default     = 60
+}
+
+variable "sql_min_capacity" {
+  type        = number
+  description = "Minimum vCores a serverless database scales down to (the floor it bills at while active, before auto-pause). 0.5 is the smallest Gen5 value. Ignored for non-serverless SKUs."
+  default     = 0.5
+  validation {
+    condition     = var.sql_min_capacity >= 0.5
+    error_message = "sql_min_capacity must be at least 0.5."
+  }
+}
+
+variable "sql_admin_include_deployer" {
+  type        = bool
+  description = "Add the identity running 'terraform apply' (data.azurerm_client_config.current) to the SQL administrators group. Set true for a local dev apply so the deployer can run the contained-user provisioner; leave false for CI/prod, where DBAs are added to the group out of band."
+  default     = false
 }
 
 variable "sql_use_free_limit" {

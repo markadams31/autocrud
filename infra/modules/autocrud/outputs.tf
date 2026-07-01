@@ -27,6 +27,11 @@ output "app_users_group_name" {
   value       = azuread_group.app_users.display_name
 }
 
+output "sql_admins_group_name" {
+  description = "Entra security group that is the SQL Server Entra admin. Add DBAs here to grant SQL administration (independent of who runs terraform apply)."
+  value       = azuread_group.sql_admins.display_name
+}
+
 # ---------------------------------------------------------------------------
 # Post-provisioning commands, in the order they're run. The environment
 # wrappers surface these with a "_N_" prefix so they sort to the top of the
