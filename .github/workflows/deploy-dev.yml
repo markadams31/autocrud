@@ -1,28 +1,30 @@
 name: Deploy · dev
 
-# Every merge to main ships to the dev environment, after the full CI suite
-# passes. The build/deploy logic lives in the reusable deploy.yml.
+# Every merge to main ships to dev, after the full CI suite: CI gate → build the
+# ONE artifact (image.yml: buildx build + trivy gate + SBOM/SLSA attest) → deploy
+# it by immutable digest (deploy.yml). That same digest is what prod promotes —
+# nothing downstream is rebuilt.
 on:
   push:
     branches: [main]
-  # Manual rollback/redeploy: supply a previously built tag (e.g. an earlier
-  # commit SHA) to repoint dev at it without rebuilding. Leave blank to build
-  # and deploy the current HEAD.
+  # Manual redeploy / rollback: supply a full image ref already in ACR
+  # (registry/autocrud@sha256:...) to repoint dev at it without rebuilding.
+  # Blank = build + deploy HEAD.
   workflow_dispatch:
     inputs:
-      image_tag:
-        description: Existing image tag to redeploy without rebuilding (blank = build + deploy HEAD).
+      image_ref:
+        description: Existing image ref to redeploy/rollback (blank = build + deploy HEAD).
         required: false
         type: string
 
 permissions:
   contents: read
-  id-token: write # OIDC token is minted under the caller's grant (used by deploy.yml)
-  attestations: write # SBOM + SLSA provenance attestations (written in deploy.yml)
-  pull-requests: read # caller must grant what the called ci.yml's change-detection job requests
+  id-token: write # OIDC (azure/login) + Sigstore signing, used by the called workflows
+  attestations: write # SBOM + SLSA attestations (image.yml)
+  security-events: write # trivy SARIF upload (image.yml)
+  pull-requests: read # ci.yml's change-detection job
 
 concurrency:
-  # Never cancel an in-flight deploy; just queue the next one.
   group: deploy-dev
   cancel-in-progress: false
 
@@ -31,13 +33,26 @@ jobs:
     name: CI gate
     uses: ./.github/workflows/ci.yml
 
+  build:
+    name: Build artifact
+    needs: ci
+    # Skip the build on a manual rollback to an already-built ref.
+    if: ${{ github.event_name == 'push' || inputs.image_ref == '' }}
+    uses: ./.github/workflows/image.yml
+    with:
+      environment: dev
+    secrets: inherit
+
   deploy:
     name: Deploy
-    needs: ci
+    needs: [ci, build]
+    if: ${{ always() && needs.ci.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped') }}
     uses: ./.github/workflows/deploy.yml
     with:
       environment: dev
-      image_tag: ${{ inputs.image_tag || github.sha }}
-      # Rebuild for a normal HEAD deploy; repoint-only when a prior tag is given.
-      build: ${{ !inputs.image_tag }}
+      # Built ref on a normal push; the supplied ref on a manual rollback.
+      image_ref: ${{ inputs.image_ref != '' && inputs.image_ref || needs.build.outputs.ref }}
+      # Enforce the exact SHA on a fresh build; fall back to status-only when
+      # rolling back to an arbitrary/older ref (see deploy.yml expect_sha).
+      expect_sha: ${{ inputs.image_ref != '' && '' || github.sha }}
     secrets: inherit

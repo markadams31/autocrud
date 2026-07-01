@@ -1,58 +1,53 @@
-name: Deploy (reusable)
+name: Deploy image (reusable)
 
-# Builds the image in ACR and rolls it out to one App Service environment.
-# Called by deploy-dev.yml and deploy-prod.yml so the build/deploy/smoke logic
-# lives in exactly one place. Authentication is via OIDC — no stored secrets.
+# Deploys a pre-built, scanned, attested image to one App Service environment,
+# addressed by immutable digest — it never builds. Repoints the app, smoke-checks
+# the NEW container, and auto-rolls-back to the previously-running image if the
+# smoke check fails, so a bad release doesn't leave the environment broken.
 #
-# The caller must:
-#   - grant `id-token: write` (OIDC token is minted under the caller's grant),
-#   - pass `secrets: inherit` so the environment's AZURE_* secrets resolve,
-#   - target a GitHub Environment that defines the ACR_NAME / APP_NAME /
-#     RESOURCE_GROUP variables and the AZURE_* secrets.
+# Called by deploy-dev.yml (after image.yml builds the artifact) and by
+# deploy-prod.yml (after it resolves + verifies the promoted digest). The caller
+# passes `secrets: inherit` and grants id-token: write.
 on:
   workflow_call:
     inputs:
       environment:
-        description: Target GitHub Environment (dev or prod).
         required: true
         type: string
-      image_tag:
-        description: Immutable image tag to build and deploy (commit SHA or release tag).
+      image_ref:
+        description: Full immutable image reference to deploy (registry/autocrud@sha256:...).
         required: true
         type: string
-      build:
-        description: Build the image in ACR first. Set false to repoint at an already-built tag (rollback).
+      expect_sha:
+        description: >-
+          Commit SHA the image was built from. When set, the smoke check requires
+          /health to report this exact SHA (proves the NEW container is live).
+          Leave blank for a rollback to an older image whose SHA is unknown or
+          predates the /health sha field — the check then falls back to status=ok.
         required: false
-        type: boolean
-        default: true
+        type: string
+        default: ""
 
 permissions:
   contents: read
 
 jobs:
   deploy:
-    name: Build image + deploy
+    name: Deploy ${{ inputs.environment }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # Environment-scoped vars/secrets resolve against this; prod's required-
-    # reviewer rule pauses the run here for approval.
     environment:
       name: ${{ inputs.environment }}
       url: https://${{ vars.APP_NAME }}.azurewebsites.net
     permissions:
-      id-token: write # OIDC for azure/login + Sigstore keyless signing
+      id-token: write
       contents: read
-      attestations: write # write SLSA provenance + SBOM attestations for the image
     env:
-      ACR_NAME: ${{ vars.ACR_NAME }}
       APP_NAME: ${{ vars.APP_NAME }}
       RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
-      IMAGE_TAG: ${{ inputs.image_tag }}
+      TARGET: ${{ inputs.image_ref }}
+      EXPECT_SHA: ${{ inputs.expect_sha }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-
       - name: Azure login (OIDC)
         uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
         with:
@@ -60,110 +55,64 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      # Remote build in ACR (no local Docker needed). The repo-root .dockerignore
-      # keeps the uploaded context small. Tag with the immutable input tag and
-      # move :latest.
-      - name: Build and push image in ACR
-        if: ${{ inputs.build }}
+      # Record what's running now so we can restore it if the smoke check fails.
+      - name: Capture current image (rollback target)
+        id: current
         run: |
-          az acr build \
-            --registry "$ACR_NAME" \
-            --image "autocrud:$IMAGE_TAG" \
-            --image "autocrud:latest" \
-            --build-arg "GIT_SHA=$IMAGE_TAG" \
-            --build-arg "BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            .
+          previous=$(az webapp config container show \
+            --name "$APP_NAME" --resource-group "$RESOURCE_GROUP" \
+            --query "[?name=='DOCKER_CUSTOM_IMAGE_NAME'].value | [0]" -o tsv 2>/dev/null || true)
+          echo "previous=$previous" >> "$GITHUB_OUTPUT"
+          echo "Currently running: ${previous:-<none>}"
 
-      # ── Supply chain: SBOM + signed SLSA provenance for the built image ───────
-      # Bind everything to the immutable digest (both tags point at it) so the
-      # SBOM and attestations describe the exact artifact, not a moveable tag.
-      - name: Resolve image digest
-        id: image
-        if: ${{ inputs.build }}
+      # Repoint by digest. Changing the image config already triggers the
+      # restart + pull; a second explicit restart only cancels that in-flight
+      # start (SiteStartupCancelled), so we don't issue one.
+      - name: Repoint App Service
         run: |
-          login_server=$(az acr show --name "$ACR_NAME" --query loginServer -o tsv)
-          digest=$(az acr repository show \
-            --name "$ACR_NAME" --image "autocrud:$IMAGE_TAG" \
-            --query digest -o tsv)
-          echo "image=$login_server/autocrud" >> "$GITHUB_OUTPUT"
-          echo "digest=$digest" >> "$GITHUB_OUTPUT"
-          echo "Built $login_server/autocrud@$digest"
-
-      # Registry login so syft can pull the image manifest/layers to inventory.
-      - name: Log in to ACR (for the image scan)
-        if: ${{ inputs.build }}
-        run: az acr login --name "$ACR_NAME"
-
-      # Generate a Software Bill of Materials from the pushed image (syft) and
-      # keep it as a workflow artifact for the record.
-      - name: Generate SBOM (SPDX)
-        if: ${{ inputs.build }}
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
-        with:
-          image: ${{ steps.image.outputs.image }}@${{ steps.image.outputs.digest }}
-          format: spdx-json
-          output-file: sbom.spdx.json
-          upload-artifact: true
-          artifact-name: sbom-${{ inputs.image_tag }}.spdx.json
-
-      # Sign a SLSA build-provenance attestation for the image — keyless via the
-      # job's OIDC token (Sigstore/Fulcio), recorded in the Rekor transparency
-      # log. Verify with: gh attestation verify oci://<image>@<digest> --owner <org>
-      - name: Attest build provenance (SLSA)
-        if: ${{ inputs.build }}
-        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
-        with:
-          subject-name: ${{ steps.image.outputs.image }}
-          subject-digest: ${{ steps.image.outputs.digest }}
-
-      # Sign an SBOM attestation binding the SBOM above to the same image digest.
-      - name: Attest SBOM
-        if: ${{ inputs.build }}
-        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
-        with:
-          subject-name: ${{ steps.image.outputs.image }}
-          subject-digest: ${{ steps.image.outputs.digest }}
-          sbom-path: sbom.spdx.json
-
-      # Point the App Service at the immutable tag (clean rollback target).
-      # Changing the container image config already triggers the restart +
-      # image-pull; a second explicit `az webapp restart` only cancels that
-      # in-flight start (SiteStartupCancelled in the platform logs) and adds
-      # churn, so we don't issue one. Updating the image directly is expected —
-      # the app_service.tf lifecycle ignores docker_image_name changes.
-      - name: Update App Service image
-        run: |
-          login_server=$(az acr show --name "$ACR_NAME" --query loginServer -o tsv)
           az webapp config container set \
-            --name "$APP_NAME" \
-            --resource-group "$RESOURCE_GROUP" \
-            --container-image-name "$login_server/autocrud:$IMAGE_TAG"
+            --name "$APP_NAME" --resource-group "$RESOURCE_GROUP" \
+            --container-image-name "$TARGET"
 
-      # Validate the NEW container is actually serving — not merely that /health
-      # is 200. The OLD container keeps answering /health 200 until it stops, so a
-      # plain status check passes *before* the new image is live and never catches
-      # a bad build. /health is anonymous (excluded from EasyAuth) and echoes the
-      # baked build SHA (app.build_info), so we poll until it reports BOTH
-      # status=ok (snapshot loaded + DB reachable) AND the exact SHA we deployed.
-      # Retry for several minutes to cover the restart + serverless SQL cold-start.
-      #
-      # (/version carries the same SHA but sits behind EasyAuth, so an
-      # unauthenticated CI probe can't read it — /health is the anonymous gate.)
-      - name: Smoke check (new container healthy + correct build)
+      # Smoke-check the NEW container. /health is anonymous and echoes the build
+      # SHA (app.build_info). With EXPECT_SHA set we require status=ok AND that
+      # exact SHA — so the OLD container (which answers 200 until it stops) can't
+      # pass the gate. Without EXPECT_SHA (rollback) we accept status=ok. Retry
+      # through the restart + serverless SQL cold start.
+      - name: Smoke check
+        id: smoke
         run: |
           host=$(az webapp show --name "$APP_NAME" --resource-group "$RESOURCE_GROUP" --query defaultHostName -o tsv)
           url="https://$host/health"
-          echo "Probing $url for build $IMAGE_TAG"
+          echo "Probing $url (expect_sha='${EXPECT_SHA:-<any>}')"
           for i in $(seq 1 40); do
             body=$(curl -s --max-time 10 "$url" || echo '{}')
             status=$(echo "$body" | jq -r '.status // empty' 2>/dev/null || true)
             sha=$(echo "$body" | jq -r '.sha // empty' 2>/dev/null || true)
-            if [ "$status" = "ok" ] && [ "$sha" = "$IMAGE_TAG" ]; then
-              echo "Healthy and running $sha"
+            if [ "$status" = "ok" ] && { [ -z "$EXPECT_SHA" ] || [ "$sha" = "$EXPECT_SHA" ]; }; then
+              echo "Healthy${EXPECT_SHA:+ and running $sha}"
               exit 0
             fi
-            echo "Attempt $i: status='${status:-none}' sha='${sha:-none}' (want ok / $IMAGE_TAG) — waiting..."
+            echo "Attempt $i: status='${status:-none}' sha='${sha:-none}' — waiting..."
             sleep 10
           done
-          echo "New container did not become healthy on build $IMAGE_TAG in time — failing the deploy."
+          echo "::error::New container did not become healthy in time."
+          exit 1
+
+      # Auto-rollback: if the smoke check failed and we know what was running
+      # before, restore it so the environment isn't left on a broken release.
+      - name: Roll back on failed smoke
+        if: ${{ failure() && steps.smoke.outcome == 'failure' && steps.current.outputs.previous != '' }}
+        run: |
+          echo "::warning::Smoke check failed — rolling back to ${{ steps.current.outputs.previous }}"
+          az webapp config container set \
+            --name "$APP_NAME" --resource-group "$RESOURCE_GROUP" \
+            --container-image-name "${{ steps.current.outputs.previous }}"
+          host=$(az webapp show --name "$APP_NAME" --resource-group "$RESOURCE_GROUP" --query defaultHostName -o tsv)
+          for _ in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "https://$host/health" || echo 000)
+            if [ "$code" = "200" ]; then echo "Rolled back and healthy"; exit 0; fi
+            sleep 10
+          done
+          echo "::error::Rollback did not become healthy — manual intervention needed."
           exit 1

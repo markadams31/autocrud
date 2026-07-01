@@ -1,11 +1,14 @@
 name: Security
 
-# Secret, SAST, dependency, and container-image scanning. Kept out of ci.yml (the
-# test gate) so it can also run on a weekly schedule — catching newly-disclosed
-# CVEs in code that hasn't changed, not only on PRs. Tools are installed as pinned
-# release binaries / via uv rather than marketplace actions, matching this repo's
-# preference (see the actionlint job in ci.yml). Findings upload to the GitHub
-# Security tab (code scanning) as SARIF where the tool supports it, next to CodeQL.
+# Secret, SAST, and dependency scanning. Kept out of ci.yml (the test gate) so it
+# can also run on a weekly schedule — catching newly-disclosed CVEs in code that
+# hasn't changed, not only on PRs. Tools are installed as pinned release binaries
+# / via uv rather than marketplace actions, matching this repo's preference (see
+# the actionlint job in ci.yml). Findings upload to the GitHub Security tab (code
+# scanning) as SARIF where supported, next to CodeQL.
+#
+# Container-image vulnerability scanning lives in image.yml (the build-once flow),
+# so the exact digest that ships is the one that's gated — not a separate build.
 on:
   pull_request:
     branches: [main]
@@ -101,29 +104,9 @@ jobs:
         run: uvx pip-audit -r requirements.txt --strict
 
   npm-deps:
-    name: Dependencies · npm audit (frontend)
+    name: Dependencies · osv-scanner (frontend)
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    defaults:
-      run:
-        working-directory: frontend
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-      - run: npm ci
-      - name: Run npm audit
-        run: npm audit --audit-level=high
-
-  image-scan:
-    name: Container image · trivy
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
     permissions:
       contents: read
       security-events: write
@@ -131,34 +114,23 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
-      # Build once and load into the local daemon so trivy can scan it. Shares the
-      # gha build cache with ci.yml's docker-build, so this is usually a cache hit.
-      - name: Build image
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
-        with:
-          context: .
-          push: false
-          load: true
-          tags: autocrud:scan
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-      - name: Install trivy
+      # osv-scanner (OSV database) rather than `npm audit`, which is a flaky gate
+      # — its advisory feed churns and it over-reports dev-only advisories. OSV is
+      # steadier and emits SARIF for the Security tab.
+      - name: Install osv-scanner
         env:
-          TRIVY_VERSION: 0.72.0
+          OSV_VERSION: 2.4.0
         run: |
-          curl -fsSL -o trivy.tar.gz \
-            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
-          tar -xzf trivy.tar.gz trivy
-      # Gate on FIXABLE High/Critical so an unpatched base-image CVE doesn't block
-      # every deploy, while still reporting to the Security tab via SARIF.
-      - name: Scan image
+          curl -fsSL -o osv-scanner \
+            "https://github.com/google/osv-scanner/releases/download/v${OSV_VERSION}/osv-scanner_linux_amd64"
+          chmod +x osv-scanner
+      - name: Scan frontend lockfile
         run: >-
-          ./trivy image --ignore-unfixed --severity HIGH,CRITICAL
-          --format sarif --output trivy.sarif --exit-code 1 autocrud:scan
+          ./osv-scanner scan source --lockfile=frontend/package-lock.json
+          --format sarif --output osv.sarif
       - name: Upload SARIF
         if: ${{ !cancelled() }}
         uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
         with:
-          sarif_file: trivy.sarif
-          category: trivy
+          sarif_file: osv.sarif
+          category: osv-scanner
