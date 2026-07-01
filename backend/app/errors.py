@@ -236,7 +236,7 @@ def _constraint_columns(sa_table: object) -> dict[str, list[str]]:
     if sa_table is None:
         return out
     try:
-        table_columns = {col.name for col in sa_table.columns}
+        table_columns = {col.name for col in getattr(sa_table, "columns", ())}
         for constraint in getattr(sa_table, "constraints", ()) or ():
             name = getattr(constraint, "name", None)
             if not name:

@@ -156,14 +156,14 @@ def _server_default_generates_value(col: Column) -> bool:
     """
     if col.server_default is None:
         return False
-    raw = col.server_default.arg if hasattr(col.server_default, "arg") else col.server_default
+    raw = getattr(col.server_default, "arg", col.server_default)
     normalized = str(raw).lower()
     return any(fn in normalized for fn in _DB_GENERATING_FUNCTIONS)
 
 
 def _is_db_owned(
     col: Column,
-    generated_always: set[tuple[str, str, str]],
+    generated_always: frozenset[tuple[str, str, str]],
     computed: frozenset[tuple[str, str, str]] = frozenset(),
 ) -> bool:
     """
@@ -191,7 +191,7 @@ def _is_db_owned(
 
 def _classify(
     col: Column,
-    generated_always: set[tuple[str, str, str]],
+    generated_always: frozenset[tuple[str, str, str]],
     computed: frozenset[tuple[str, str, str]] = frozenset(),
 ) -> ColumnKind:
     """
@@ -603,7 +603,9 @@ def _build_create_model(
         else:
             fields[info.name] = (Optional[annotation], None)
 
-    return create_model(f"{schema}_{table.name}_Create", **fields)
+    # create_model's typed overloads don't cover the dynamic **fields form (a
+    # known Pydantic typing limitation); the runtime call is correct.
+    return create_model(f"{schema}_{table.name}_Create", **fields)  # pyright: ignore[reportCallIssue, reportArgumentType]
 
 
 def _build_update_model(schema: str, table: Table, columns: list[ColumnInfo]) -> type:
@@ -629,7 +631,8 @@ def _build_update_model(schema: str, table: Table, columns: list[ColumnInfo]) ->
         info.name: (Optional[_annotation(info)], None)
         for info in editable
     }
-    return create_model(f"{schema}_{table.name}_Update", **fields)
+    # See _build_create_model: dynamic **fields isn't covered by the overloads.
+    return create_model(f"{schema}_{table.name}_Update", **fields)  # pyright: ignore[reportCallIssue, reportArgumentType]
 
 
 # ---------------------------------------------------------------------------
@@ -691,7 +694,7 @@ def _find_concurrency_token(table: Table) -> Optional[str]:
 
 def _build_column_info(
     col: Column,
-    generated_always: set[tuple[str, str, str]],
+    generated_always: frozenset[tuple[str, str, str]],
     fk_map: dict[tuple[str, str, str], tuple[str, str, str]],
     computed: frozenset[tuple[str, str, str]] = frozenset(),
     defaulted: frozenset[tuple[str, str, str]] = frozenset(),
@@ -699,13 +702,13 @@ def _build_column_info(
     pk_column_count = len(col.table.primary_key.columns)
     kind = _classify(col, generated_always, computed)
     is_audit = col.name.lower() in DB_AUDIT_COLUMNS
-    fk = fk_map.get((col.table.schema, col.table.name, col.name))
+    fk = fk_map.get((col.table.schema or "", col.table.name, col.name))
     return ColumnInfo(
         name=col.name,
         kind=kind,
         python_type=_python_type(col),
         sql_type=str(col.type),
-        nullable=col.nullable,
+        nullable=bool(col.nullable),
         is_primary_key=col.primary_key,
         is_audit=is_audit,
         required_on_create=_is_required_on_create(col, kind, pk_column_count, defaulted),
@@ -719,7 +722,7 @@ def _build_column_info(
 def _build_table_info(
     schema: str,
     table: Table,
-    generated_always: set[tuple[str, str, str]],
+    generated_always: frozenset[tuple[str, str, str]],
     fk_map: dict[tuple[str, str, str], tuple[str, str, str]],
     computed: frozenset[tuple[str, str, str]] = frozenset(),
     defaulted: frozenset[tuple[str, str, str]] = frozenset(),
@@ -798,6 +801,11 @@ def reflect_schemas() -> ReflectedSchema:
 
     for table in metadata.tables.values():
         schema = table.schema
+        if schema is None:
+            # Tables are reflected per explicit schema (metadata.reflect(schema=…)),
+            # so schema is always set — this guard just makes that provable to the
+            # type checker for the keys and calls below.
+            continue
         if (schema, table.name) in history_keys:
             continue
         if not table.primary_key.columns:

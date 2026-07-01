@@ -138,6 +138,17 @@ repos:
   # Slow tiers (integration/Docker, Playwright, terraform validate) stay in CI.
   - repo: local
     hooks:
+      # Type gate — mirrors the "Backend · type check (pyright)" CI job so a type
+      # error is caught locally before the push, not after. Runs via uv so pyright
+      # sees the app's real SQLAlchemy/Pydantic types; config in [tool.pyright]
+      # (backend/pyproject.toml). pass_filenames: false → pyright uses that config.
+      - id: pyright
+        name: Backend type check (pyright)
+        language: system
+        entry: uv run --directory backend --extra test pyright
+        files: '^backend/app/.*\.py$'
+        pass_filenames: false
+        stages: [pre-push]
       - id: backend-tests
         name: Backend unit + API tests (pytest, no Docker)
         language: system

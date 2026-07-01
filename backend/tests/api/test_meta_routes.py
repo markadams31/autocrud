@@ -126,3 +126,59 @@ def test_options_returns_empty_when_target_not_in_snapshot(widget):
         assert resp.json() == []
     finally:
         object.__setattr__(col, "foreign_key", None)
+
+
+def test_options_returns_empty_when_user_lacks_select(widget):
+    # FK target IS in the snapshot, but the user can't SELECT it → the dropdown
+    # degrades to empty rather than erroring (the intended permission fallback).
+    col = widget.table_info.column("Quantity")
+    object.__setattr__(col, "foreign_key", ("dbo", "Widget", "WidgetID"))
+
+    class _Conn:
+        def execute(self, *a, **k):
+            raise Exception("SELECT permission denied on object 'Widget'.")
+
+    widget.client.app.dependency_overrides[get_db] = lambda: _Conn()
+    try:
+        resp = widget.client.get("/meta/dbo/Widget/options/Quantity")
+        assert resp.status_code == 200
+        assert resp.json() == []
+    finally:
+        object.__setattr__(col, "foreign_key", None)
+        widget.client.app.dependency_overrides.pop(get_db, None)
+
+
+def test_options_surfaces_non_permission_error(widget):
+    # A genuine fault (not a permission denial) must NOT be masked as an empty
+    # dropdown — it surfaces so the real problem is visible.
+    col = widget.table_info.column("Quantity")
+    object.__setattr__(col, "foreign_key", ("dbo", "Widget", "WidgetID"))
+
+    class _Conn:
+        def execute(self, *a, **k):
+            raise Exception("some unexpected driver failure")
+
+    widget.client.app.dependency_overrides[get_db] = lambda: _Conn()
+    try:
+        resp = widget.client.get("/meta/dbo/Widget/options/Quantity")
+        assert resp.status_code == 500
+        assert resp.json()["code"] == "INTERNAL_ERROR"
+    finally:
+        object.__setattr__(col, "foreign_key", None)
+        widget.client.app.dependency_overrides.pop(get_db, None)
+
+
+def test_list_tables_surfaces_query_failure(widget):
+    # HAS_PERMS_BY_NAME reports denial as a value, not an exception — so a raised
+    # error here is a genuine fault and must surface, not blank the sidebar.
+    class _Conn:
+        def execute(self, *a, **k):
+            raise Exception("some unexpected driver failure")
+
+    widget.client.app.dependency_overrides[get_db] = lambda: _Conn()
+    try:
+        resp = widget.client.get("/meta/dbo")
+        assert resp.status_code == 500
+        assert resp.json()["code"] == "INTERNAL_ERROR"
+    finally:
+        widget.client.app.dependency_overrides.pop(get_db, None)
