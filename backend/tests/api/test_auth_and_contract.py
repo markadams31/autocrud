@@ -79,6 +79,18 @@ def test_health_503_when_database_unreachable(widget):
     assert resp.json()["code"] == "DATABASE_UNAVAILABLE"
 
 
+def test_version_reports_build_info(snapshot_only):
+    # /version is static process info — no snapshot or DB needed — so the About
+    # dialog can show which build is running even during startup. Shape only: the
+    # values are "dev" outside a CI-built image but a real SHA/time in one.
+    resp = snapshot_only.client.get("/version")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert set(body) >= {"sha", "time"}
+    assert isinstance(body["sha"], str) and body["sha"]
+    assert isinstance(body["time"], str) and body["time"]
+
+
 def test_malformed_request_body_is_422_validation_error(widget):
     # A non-int page fails FastAPI's own request-model validation, which the
     # RequestValidationError handler turns into the standard VALIDATION_ERROR

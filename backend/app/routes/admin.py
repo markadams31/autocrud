@@ -1,7 +1,7 @@
 """
 routes/admin.py — Operational endpoints.
 
-Two endpoints:
+Three endpoints:
 
   GET  /health          Readiness check. Returns 200 only if the application
                         is running, the schema snapshot is loaded, and the
@@ -9,17 +9,22 @@ Two endpoints:
                         App Service to route traffic only to instances that
                         can actually serve requests.
 
+  GET  /version         The running build's provenance (commit SHA + build
+                        time, baked into the image — see app.build_info).
+                        Served from process constants, no snapshot or database
+                        needed. The frontend's About dialog reads it.
+
   POST /admin/refresh   Re-reflect the database schema and rebuild all
                         Pydantic models without restarting the process.
                         Useful after DDL changes (new tables, columns,
                         constraints). Not surfaced in the frontend — an
                         advanced user navigates to it directly.
 
-Authentication is handled at the infrastructure level by EasyAuth. Both
+Authentication is handled at the infrastructure level by EasyAuth. All
 endpoints are therefore accessible to any authenticated user. This is
-intentional for /health (monitoring tools need it) and acceptable for
-/admin/refresh (a schema re-reflection is read-only and harmless to
-trigger unnecessarily).
+intentional for /health (monitoring tools need it), acceptable for /version
+(it exposes only the build id), and acceptable for /admin/refresh (a schema
+re-reflection is read-only and harmless to trigger unnecessarily).
 """
 
 from __future__ import annotations
@@ -31,6 +36,7 @@ import time
 from fastapi import APIRouter, Depends
 from sqlalchemy import text
 
+from app import build_info
 from app.connection import reflection_engine
 from app.errors import ApiError, ErrorCode
 from app.reflection import reflect_schemas
@@ -170,6 +176,19 @@ def health(db_reachable: bool = Depends(database_is_reachable)) -> dict:
         )
 
     return {"status": "ok", "tables": len(snapshot.tables)}
+
+
+@router.get("/version")
+def version() -> dict:
+    """
+    The running build's provenance: the commit SHA the image was built from and
+    its UTC build time, baked into the image at build time (see app.build_info).
+
+    Served from process constants — no snapshot or database needed, so it answers
+    even while startup is still in progress. The About dialog shows this; values
+    of "dev" mean the app is running outside a CI-built image (local uvicorn).
+    """
+    return build_info.as_dict()
 
 
 @router.post("/admin/refresh")

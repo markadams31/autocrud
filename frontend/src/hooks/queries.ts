@@ -44,6 +44,7 @@ const ROWS_REFETCH_INTERVAL = 30_000
 
 export const queryKeys = {
   me: ['me'] as const,
+  version: ['version'] as const,
   schemas: ['schemas'] as const,
   tables: (schema: string) => ['tables', schema] as const,
   tableMeta: (schema: string, table: string) => ['tableMeta', schema, table] as const,
@@ -72,6 +73,19 @@ export function useMe() {
     queryFn: () => api.me(),
     staleTime: Infinity,
     retry: false,
+  })
+}
+
+/**
+ * The running backend build — commit SHA + build time (GET /version). Static for
+ * the life of the process, so it never goes stale; a redeploy reloads the SPA.
+ * Shown in the About dialog.
+ */
+export function useVersion() {
+  return useQuery({
+    queryKey: queryKeys.version,
+    queryFn: () => api.version(),
+    staleTime: Infinity,
   })
 }
 

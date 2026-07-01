@@ -30,8 +30,9 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { SaveButton } from '@/components/save-button'
-import { useRefreshSchema, useSchemas } from '@/hooks/queries'
+import { useRefreshSchema, useSchemas, useVersion } from '@/hooks/queries'
 import { messageFor } from '@/lib/errors'
+import type { BuildInfo } from '@/types'
 
 export function SettingsMenu() {
   const [aboutOpen, setAboutOpen] = useState(false)
@@ -71,6 +72,7 @@ function AboutDialog({
   onOpenChange: (open: boolean) => void
 }) {
   const { data } = useSchemas()
+  const { data: build } = useVersion()
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
@@ -89,10 +91,27 @@ function AboutDialog({
             <span className="font-medium text-foreground">{data.database}</span>.
           </p>
         )}
+        {build && (
+          <p className="text-xs text-muted-foreground">{buildLabel(build)}</p>
+        )}
         <DialogFooter showCloseButton />
       </DialogContent>
     </Dialog>
   )
+}
+
+/**
+ * A one-line build label for the About dialog. The backend reports a real commit
+ * SHA + build time only for a CI-built image; otherwise it's a sentinel — "dev"
+ * (ran outside a container) or "unknown" (an image built without the CI
+ * build-args, see app/build_info.py). Both mean "not a tracked build", so we show
+ * a plain "Development build" rather than a meaningless version string.
+ */
+function buildLabel(build: BuildInfo): string {
+  if (build.sha === 'dev' || build.sha === 'unknown') return 'Development build'
+  const built = Date.parse(build.time)
+  const when = Number.isNaN(built) ? '' : ` · built ${new Date(built).toLocaleDateString()}`
+  return `Version ${build.sha}${when}`
 }
 
 function RefreshDialog({

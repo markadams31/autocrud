@@ -12,6 +12,7 @@
 
 import type {
   ApiErrorBody,
+  BuildInfo,
   BulkCreateRequest,
   BulkCreateResponse,
   BulkDeleteRequest,
@@ -155,6 +156,9 @@ const jsonPost = (body: unknown) => ({ method: 'POST', body: JSON.stringify(body
 
 export const api = {
   me: () => request<Me>('/me'),
+
+  /** The running backend build — commit SHA + build time (GET /version). */
+  version: () => request<BuildInfo>('/version'),
 
   /** Re-reflect the database schema and rebuild the API (POST /admin/refresh). */
   refreshSchema: () =>
