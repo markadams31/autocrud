@@ -242,6 +242,25 @@ def _escape_like(term: str) -> str:
     )
 
 
+def _require_comparable(sa_col) -> None:
+    """
+    Reject a value filter on a column the database can't compare or LIKE —
+    varbinary/rowversion (bytes) and other opaque types (xml). Offering a text
+    operator such as "contains" on these produced a driver error (or a bare 500)
+    that the grid then silently swallowed; fail clean with a 400 instead. Null
+    checks (isnull/notnull) don't compare a value, so they skip this.
+    """
+    try:
+        pytype = sa_col.type.python_type
+    except (NotImplementedError, AttributeError):
+        pytype = None
+    if pytype is None or pytype is bytes:
+        raise ApiError(
+            ErrorCode.BAD_REQUEST,
+            "Filtering is not supported for this column type.",
+        )
+
+
 def _filter_clause(sa_col, raw):
     """
     Build a WHERE clause for one column filter, or return None to skip it.
@@ -263,8 +282,9 @@ def _filter_clause(sa_col, raw):
     caller drops the filter rather than building a meaningless clause (e.g. a
     half-typed filter chip in the UI doesn't constrain the query).
     """
-    # Shorthand: bare scalar (equality) or list (IN).
+    # Shorthand: bare scalar (equality) or list (IN) — both compare by value.
     if not isinstance(raw, dict):
+        _require_comparable(sa_col)
         if isinstance(raw, list):
             return sa_col.in_(raw) if raw else sa_col.in_([None])
         return sa_col == raw
@@ -276,6 +296,11 @@ def _filter_clause(sa_col, raw):
         return sa_col.is_(None)
     if op == "notnull":
         return sa_col.is_not(None)
+
+    # Every remaining operator compares against the column's value (LIKE too),
+    # which varbinary/xml can't do — reject before building a clause the driver
+    # would only fail on.
+    _require_comparable(sa_col)
 
     if op == "between":
         if not isinstance(val, (list, tuple)) or len(val) != 2:
@@ -536,9 +561,9 @@ def _fetch_row(table: TableInfo, pk_str: str, db: Connection) -> dict:
 # header on update/delete; we add it to the WHERE so the write only lands if the
 # row hasn't changed since it was read. Zero rows affected then means either the
 # row is gone (404) or its version moved on (409 CONFLICT) — distinguished by a
-# follow-up existence check. If the table has no rowversion, or the client sends
-# no If-Match, there's no precondition and the write is last-writer-wins —
-# protection is purely additive and opt-in per request.
+# follow-up existence check. A table WITH a rowversion *requires* If-Match on
+# writes (see _require_if_match) — an unguarded write would silently overwrite a
+# concurrent edit — so last-writer-wins applies only to tables with no rowversion.
 # ---------------------------------------------------------------------------
 
 def _decode_token(raw: str) -> bytes:
@@ -568,6 +593,21 @@ def _concurrency_clause(table: TableInfo, if_match: Optional[str]):
     if not token_col or not if_match:
         return None
     return table.sa_table.c[token_col] == _decode_token(if_match)
+
+
+def _require_if_match(table: TableInfo, if_match: Optional[str]) -> None:
+    """
+    A write to a table with a rowversion MUST carry the client's expected version
+    (If-Match), so a concurrent edit is detected instead of silently overwritten.
+    Reject the unguarded write rather than lose another user's change. (Tables
+    without a rowversion have no version to check and are unaffected.)
+    """
+    if table.concurrency_token and not if_match:
+        raise ApiError(
+            ErrorCode.BAD_REQUEST,
+            "This record uses optimistic concurrency; reload it and retry so the "
+            "write carries its current version (the If-Match header).",
+        )
 
 
 def _row_exists(table: TableInfo, pk_str: str, db: Connection) -> bool:
@@ -640,9 +680,15 @@ def query_rows(
     if pk_cols:
         stmt = stmt.order_by(*pk_cols)
 
-    # Pagination
+    # Pagination. Reject an over-cap page_size rather than silently clamp it, so a
+    # client can't miscount pages against a size the server didn't actually use.
+    if body.page_size > _MAX_PAGE_SIZE:
+        raise ApiError(
+            ErrorCode.BAD_REQUEST,
+            f"page_size must be at most {_MAX_PAGE_SIZE}.",
+        )
     page      = max(1, body.page)
-    page_size = max(1, min(body.page_size, _MAX_PAGE_SIZE))
+    page_size = max(1, body.page_size)
     offset    = (page - 1) * page_size
 
     total = _execute(db, count_stmt).scalar() or 0
@@ -742,10 +788,11 @@ def update_row(
     Two-pass scrubbing ensures server-controlled columns can never be set
     by the client regardless of what the request body contains.
 
-    Optimistic concurrency: if the table has a rowversion column and the client
-    sends an If-Match header, the update only lands when the row still carries
-    that version — otherwise it's a 409 CONFLICT (the row changed since it was
-    read). See the concurrency helpers above.
+    Optimistic concurrency: a table with a rowversion column *requires* an
+    If-Match header carrying the version the client read; the update only lands
+    when the row still carries it — otherwise a 409 CONFLICT (the row changed
+    since it was read). A write with no If-Match is rejected (400) rather than
+    silently overwriting a concurrent edit. See the concurrency helpers above.
     """
     user = _user_from_request(request)
 
@@ -757,7 +804,9 @@ def update_row(
         # than issuing a no-op UPDATE.
         return _fetch_row(table, pk, db)
 
-    precondition = _concurrency_clause(table, request.headers.get("if-match"))
+    if_match = request.headers.get("if-match")
+    _require_if_match(table, if_match)
+    precondition = _concurrency_clause(table, if_match)
 
     stmt = update(table.sa_table).where(_pk_filter(table, pk)).values(**payload)
     if precondition is not None:
@@ -785,10 +834,11 @@ def delete_row(
     """
     Delete a row by primary key.
 
-    Optimistic concurrency: if the table has a rowversion column and the client
-    sends an If-Match header, the delete only lands when the row still carries
-    that version — otherwise it's a 409 CONFLICT (the row changed since it was
-    read), so a stale view can't unknowingly delete a newer revision.
+    Optimistic concurrency: a table with a rowversion column *requires* an
+    If-Match header carrying the version the client read; the delete only lands
+    when the row still carries it — otherwise a 409 CONFLICT. A delete with no
+    If-Match is rejected (400) so a stale view can't unknowingly remove a newer
+    revision.
     """
     # Record who deleted what: a delete removes the row, so unlike INSERT/UPDATE
     # the database's audit columns can't preserve the actor — the application log
@@ -796,7 +846,9 @@ def delete_row(
     # the INSERT/UPDATE/bulk lines, which all carry user=.
     user = _user_from_request(request)
 
-    precondition = _concurrency_clause(table, request.headers.get("if-match"))
+    if_match = request.headers.get("if-match")
+    _require_if_match(table, if_match)
+    precondition = _concurrency_clause(table, if_match)
 
     stmt = delete(table.sa_table).where(_pk_filter(table, pk))
     if precondition is not None:

@@ -67,13 +67,15 @@ def test_update_missing_row_is_404_even_with_if_match(versioned):
     assert resp.json()["code"] == "NOT_FOUND"
 
 
-def test_update_without_if_match_falls_back_to_last_writer_wins(versioned):
-    # A table with a rowversion still accepts a write that sends no If-Match —
-    # protection is opt-in per request, so older clients keep working.
+def test_update_without_if_match_is_rejected(versioned):
+    # A rowversion table now REQUIRES If-Match: an unguarded write could silently
+    # overwrite a concurrent edit, so it's a 400 — not last-writer-wins.
     pk = versioned.seeded_pk
     resp = versioned.client.patch(f"/api/dbo/Doc/{pk}", json={"Title": "NoToken"})
-    assert resp.status_code == 200
-    assert resp.json()["Title"] == "NoToken"
+    assert resp.status_code == 400
+    assert resp.json()["code"] == "BAD_REQUEST"
+    # The row is untouched.
+    assert _get(versioned.client, pk).json()["Title"] == "Original"
 
 
 def test_malformed_if_match_is_400(versioned):
@@ -116,8 +118,21 @@ def test_delete_with_stale_token_conflicts(versioned):
     assert _get(versioned.client, pk).status_code == 200
 
 
-def test_delete_without_if_match_falls_back(versioned):
+def test_delete_without_if_match_is_rejected(versioned):
+    # Same requirement on delete: no If-Match on a rowversion table → 400, and the
+    # row is left in place.
     pk = versioned.seeded_pk
     resp = versioned.client.delete(f"/api/dbo/Doc/{pk}")
+    assert resp.status_code == 400
+    assert resp.json()["code"] == "BAD_REQUEST"
+    assert _get(versioned.client, pk).status_code == 200
+
+
+# ── Tables without a rowversion are unaffected ───────────────────────────────
+
+def test_write_without_if_match_ok_when_no_rowversion(widget):
+    # Only rowversion tables require If-Match; a plain table keeps working.
+    pk = widget.client.post("/api/dbo/Widget", json={"Name": "Plain"}).json()["WidgetID"]
+    resp = widget.client.patch(f"/api/dbo/Widget/{pk}", json={"Name": "PlainEdited"})
     assert resp.status_code == 200
-    assert _get(versioned.client, pk).status_code == 404
+    assert resp.json()["Name"] == "PlainEdited"

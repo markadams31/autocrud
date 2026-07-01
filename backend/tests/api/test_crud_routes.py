@@ -221,11 +221,17 @@ def test_query_sort_descending(populated):
 
 # ── Query: pagination boundaries ─────────────────────────────────────────────
 
-def test_query_page_size_is_capped_at_500(populated):
-    # A caller asking for an enormous page is clamped to the server cap, not
-    # allowed to pull unbounded rows.
-    body = populated.client.post("/api/dbo/Widget/query", json={"page_size": 100000}).json()
-    assert body["page_size"] == 500          # echoed value is the clamp
+def test_query_page_size_over_cap_is_rejected(populated):
+    # An over-cap page_size fails loud (400) rather than being silently clamped,
+    # so a client can't miscount pages against a size the server didn't use.
+    resp = populated.client.post("/api/dbo/Widget/query", json={"page_size": 100000})
+    assert resp.status_code == 400
+    assert resp.json()["code"] == "BAD_REQUEST"
+
+
+def test_query_page_size_at_cap_is_allowed(populated):
+    body = populated.client.post("/api/dbo/Widget/query", json={"page_size": 500}).json()
+    assert body["page_size"] == 500          # the cap itself is fine
     assert len(body["data"]) == 25           # only 25 rows exist
 
 
