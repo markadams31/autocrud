@@ -8,17 +8,23 @@
  * row orchestration; this file owns what goes *inside* a cell.
  */
 
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import {
   ArrowDownIcon,
   ArrowUpIcon,
+  CalendarClockIcon,
+  CalendarIcon,
   ChevronsUpDownIcon,
+  ClockIcon,
+  HashIcon,
   KeyRoundIcon,
+  ToggleLeftIcon,
+  TypeIcon,
+  type LucideIcon,
 } from 'lucide-react'
 
 import { FieldControl } from '@/components/field-control'
 import { ForeignKeyCell } from '@/components/foreign-key-cell'
-import { Badge } from '@/components/ui/badge'
 import {
   HoverCard,
   HoverCardContent,
@@ -29,7 +35,7 @@ import type { FkLabelMap } from '@/hooks/queries'
 import { convertFieldValue, toInputValue, type FormValue } from '@/lib/field-values'
 import { fieldLabel, formatValue, isNumericColumn, NULL_DISPLAY } from '@/lib/format'
 import { cn } from '@/lib/utils'
-import type { ColumnMeta, Row, SortDirection } from '@/types'
+import type { ColumnMeta, FieldType, Row, SortDirection } from '@/types'
 
 /** The grid's active sort: which column, which direction. */
 export interface SortState {
@@ -203,7 +209,7 @@ export function HeaderCell({
             )}
           />
         </HoverCardTrigger>
-        <HoverCardContent side="bottom" align="start" className="w-64">
+        <HoverCardContent side="bottom" align="start">
           <ColumnMetaCard column={column} />
         </HoverCardContent>
       </HoverCard>
@@ -211,44 +217,83 @@ export function HeaderCell({
   )
 }
 
+// A small category icon per field type — the one consistent visual anchor in
+// the card header (every card gets exactly one, reflecting the kind of data).
+const FIELD_TYPE_ICON: Record<FieldType, LucideIcon> = {
+  text: TypeIcon,
+  integer: HashIcon,
+  number: HashIcon,
+  decimal: HashIcon,
+  boolean: ToggleLeftIcon,
+  date: CalendarIcon,
+  datetime: CalendarClockIcon,
+  time: ClockIcon,
+}
+
 /**
- * The header hover-card body: the column's full metadata. Boolean facts show as
- * badges (primary/foreign key, required, read-only); the rest as labelled rows.
- * Reads entirely from the already-fetched ColumnMeta — no extra request.
+ * The header hover-card body: the column's metadata as ONE consistent
+ * label/value grid. Every card shares the same skeleton — a typed headline,
+ * then aligned rows in a fixed order (Type → Nullable → Key → References →
+ * Managed by) — so the same fact sits in the same place on every column and
+ * the eye never has to re-scan. Rows that don't apply are omitted, never
+ * reordered; there are no wrapping pills or right-ragged values. Richness comes
+ * from the type icon and monospace chips for code-like values, not extra
+ * formats. Reads entirely from the already-fetched ColumnMeta — no request.
  */
 function ColumnMetaCard({ column }: { column: ColumnMeta }) {
   const readOnly = !column.editable
   const fk = column.foreign_key
+  const TypeIco = FIELD_TYPE_ICON[column.field_type]
+  // Drop the COLLATE clause str(col.type) appends — noise that blew out the card.
+  const displayType = (column.sql_type ?? column.field_type).replace(/\s+COLLATE\b.*/i, '')
+  // Fold "required on create" into the nullability line so a NOT NULL column
+  // with a default (not required) isn't conflated with one that is.
+  const nullable = column.nullable ? 'Yes' : column.required ? 'No · required' : 'No'
   return (
-    <div className="space-y-2.5">
-      <div className="flex flex-wrap items-center gap-1.5">
-        <p className="font-heading mr-auto text-sm font-semibold break-all">{column.name}</p>
-        {column.is_primary_key && <Badge variant="secondary">Primary key</Badge>}
-        {fk && <Badge variant="secondary">Foreign key</Badge>}
-        {column.required && <Badge variant="secondary">Required</Badge>}
-        {readOnly && <Badge variant="outline">Read-only</Badge>}
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <TypeIco className="size-4 shrink-0 text-muted-foreground" />
+        <p className="font-heading truncate text-sm font-semibold">{column.name}</p>
       </div>
-      <dl className="space-y-1.5 text-xs">
-        <MetaRow label="Type" value={column.sql_type ?? column.field_type} />
-        <MetaRow label="Nullable" value={column.nullable ? 'Yes' : 'No'} />
-        {fk && <MetaRow label="References" value={`${fk.schema}.${fk.table}.${fk.column}`} />}
+      <div className="h-px bg-border/60" />
+      <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-xs">
+        <MetaRow label="Type">
+          <Mono>{displayType}</Mono>
+        </MetaRow>
+        <MetaRow label="Nullable">{nullable}</MetaRow>
+        {(column.is_primary_key || fk) && (
+          <MetaRow label="Key">{column.is_primary_key ? 'Primary key' : 'Foreign key'}</MetaRow>
+        )}
+        {fk && (
+          <MetaRow label="References">
+            <Mono>{`${fk.schema}.${fk.table}.${fk.column}`}</Mono>
+          </MetaRow>
+        )}
         {readOnly && (
-          <MetaRow
-            label="Managed by"
-            value={column.is_audit ? 'the database (audit)' : 'the database'}
-          />
+          <MetaRow label="Managed by">
+            {column.is_audit ? 'the database (audit)' : 'the database'}
+          </MetaRow>
         )}
       </dl>
     </div>
   )
 }
 
-/** One label/value row inside ColumnMetaCard. */
-function MetaRow({ label, value }: { label: string; value: string }) {
+/** One label/value pair — a dt/dd that flow directly into ColumnMetaCard's grid. */
+function MetaRow({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="flex items-baseline justify-between gap-3">
-      <dt className="shrink-0 text-muted-foreground">{label}</dt>
-      <dd className="min-w-0 truncate text-right font-medium">{value}</dd>
-    </div>
+    <>
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className="min-w-0 font-medium break-words">{children}</dd>
+    </>
+  )
+}
+
+/** Monospace chip for code-like values (SQL types, FK targets). */
+function Mono({ children }: { children: ReactNode }) {
+  return (
+    <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] break-all">
+      {children}
+    </code>
   )
 }
