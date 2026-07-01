@@ -83,6 +83,23 @@ COPY backend/app/ app/
 # Built SPA, served by FastAPI as a catch-all from app/frontend/dist.
 COPY --from=frontend /frontend-dist app/frontend/dist
 
+# Build provenance — passed by CI (`az acr build --build-arg`, see
+# .github/workflows/deploy.yml) and baked in as env vars so the running app can
+# report exactly which commit it is and when it was built: a startup log line and
+# GET /version (read in app.build_info). Declared late so changing them doesn't
+# invalidate the heavy layers above.
+#
+# The build runs in ACR regardless of who starts it; only whether --build-arg is
+# supplied matters. Without the args the image reports "unknown" (a useful
+# "not built by CI" signal). For a manual build WITH provenance, pass them too:
+#   az acr build -r <acr> -t autocrud:$(git rev-parse --short HEAD) \
+#     --build-arg GIT_SHA=$(git rev-parse --short HEAD) \
+#     --build-arg BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ) .
+ARG GIT_SHA=unknown
+ARG BUILD_TIME=unknown
+ENV APP_BUILD_SHA=$GIT_SHA \
+    APP_BUILD_TIME=$BUILD_TIME
+
 # Run as a non-root user.
 RUN useradd --no-create-home --shell /bin/false appuser
 USER appuser

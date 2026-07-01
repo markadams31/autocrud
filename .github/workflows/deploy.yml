@@ -69,6 +69,8 @@ jobs:
             --registry "$ACR_NAME" \
             --image "autocrud:$IMAGE_TAG" \
             --image "autocrud:latest" \
+            --build-arg "GIT_SHA=$IMAGE_TAG" \
+            --build-arg "BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             .
 
       # Point the App Service at the immutable tag (clean rollback target) and

@@ -30,6 +30,7 @@ import contextvars
 import hashlib
 import logging
 import os
+import re
 import time
 from uuid import uuid4
 
@@ -49,6 +50,30 @@ _request_id: contextvars.ContextVar[str] = contextvars.ContextVar("request_id", 
 def current_request_id() -> str:
     """The id of the in-flight request, or '-' outside a request."""
     return _request_id.get()
+
+
+# An inbound X-Request-ID is honoured for cross-service correlation, but it is
+# attacker-controlled: it gets copied onto every log line for the request and
+# echoed back in the response header. Left unbounded, a client could send a
+# multi-kilobyte id (log bloat — one oversized line per record) or embed
+# newlines/control characters to forge extra log lines (log injection). So a
+# supplied id is accepted only after being stripped to safe characters and
+# capped; if nothing usable remains we fall back to a generated id.
+_MAX_REQUEST_ID_LEN = 64
+_UNSAFE_REQUEST_ID = re.compile(r"[^A-Za-z0-9._-]")
+
+
+def sanitize_request_id(raw: str | None) -> str | None:
+    """
+    Reduce an inbound X-Request-ID to a safe-to-log token, or None if nothing
+    usable remains. Keeps only URL-safe id characters and caps the length, so a
+    hostile or malformed header can neither bloat nor forge log lines. See the
+    constants above for the threat this guards against.
+    """
+    if not raw:
+        return None
+    cleaned = _UNSAFE_REQUEST_ID.sub("", raw)[:_MAX_REQUEST_ID_LEN]
+    return cleaned or None
 
 
 def display_user(name: str | None) -> str:
@@ -189,7 +214,7 @@ class AccessLogMiddleware:
             return
 
         headers = Headers(scope=scope)
-        request_id = headers.get("x-request-id") or uuid4().hex[:8]
+        request_id = sanitize_request_id(headers.get("x-request-id")) or uuid4().hex[:8]
         # For log context only — auth/authorization is the OBO connection's job.
         # Header lookup is case-insensitive, so the canonical constant matches.
         # display_user applies the PII policy (email / hash / none).
