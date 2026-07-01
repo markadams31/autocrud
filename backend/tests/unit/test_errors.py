@@ -60,15 +60,34 @@ def test_code_serialises_to_its_string_value():
     assert ApiError(ErrorCode.PERMISSION_DENIED).to_dict()["code"] == "PERMISSION_DENIED"
 
 
+# Realistic ODBC driver messages — the driver appends "(<errno>) (SQLxxx)", which
+# the mapper reads to pick the code. Fragments observed in production telemetry.
+_DRV = "[Microsoft][ODBC Driver 18 for SQL Server][SQL Server]"
+_PERM = f"[42000] {_DRV}The SELECT permission was denied on the object 'Employee'. (229) (SQLExecDirectW)"
+_XML_LIKE = f"[42000] {_DRV}Argument data type xml is invalid for argument 1 of like function. (8116) (SQLExecDirectW)"
+_CONVERT = f"[42000] {_DRV}Error converting data type varchar to real. (8114) (SQLExecDirectW)"
+_PK_CONVERT = f"[22018] {_DRV}Conversion failed when converting the varchar value 'export' to data type int. (245) (SQLExecDirectW)"
+
+
 @pytest.mark.parametrize(
     "exc,expected",
     [
         (IntegrityError("stmt", {}, Exception("dup")), ErrorCode.CONSTRAINT_VIOLATION),
-        # Out-of-range / overflow / precision / truncation — a bad value, so a
-        # clean 409, not a 500.
+        # Out-of-range / overflow / truncation — a value the column can't hold, so
+        # a clean 409.
         (DataError("stmt", {}, Exception("out of range")), ErrorCode.CONSTRAINT_VIOLATION),
-        (ProgrammingError("stmt", {}, Exception("denied")), ErrorCode.PERMISSION_DENIED),
+        # A denied grant is a 403 whatever SQLAlchemy class it surfaces as.
+        (ProgrammingError("stmt", {}, Exception(_PERM)), ErrorCode.PERMISSION_DENIED),
+        # A text operator on an xml column, or an uncoercible filter/key value, is
+        # a client mistake (400) — not a permission failure (was wrongly 403) nor
+        # a data-rule conflict (was wrongly 409).
+        (ProgrammingError("stmt", {}, Exception(_XML_LIKE)), ErrorCode.BAD_REQUEST),
+        (ProgrammingError("stmt", {}, Exception(_CONVERT)), ErrorCode.BAD_REQUEST),
+        (DataError("stmt", {}, Exception(_PK_CONVERT)), ErrorCode.BAD_REQUEST),
         (OperationalError("stmt", {}, Exception("timeout")), ErrorCode.DATABASE_UNAVAILABLE),
+        # An unattributed ProgrammingError means our generated SQL is malformed — a
+        # bug, so a 500 rather than a misleading 403.
+        (ProgrammingError("stmt", {}, Exception("syntax error near X")), ErrorCode.INTERNAL_ERROR),
         (ValueError("anything else"), ErrorCode.INTERNAL_ERROR),
     ],
 )
