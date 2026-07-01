@@ -78,7 +78,31 @@ resource "azuread_service_principal" "main" {
   app_role_assignment_required = true
 }
 
-# Client secret used by EasyAuth to validate tokens on the server side.
+# ---------------------------------------------------------------------------
+# Federated identity credential — managed identity as the EasyAuth credential
+#
+# Establishes trust so a token issued for the dedicated user-assigned identity
+# (azurerm_user_assigned_identity.easyauth) can be presented as the client
+# assertion for THIS app registration. That is what lets EasyAuth authenticate
+# its OAuth code exchange without a client secret. Paired with the
+# OVERRIDE_USE_MI_FIC_ASSERTION_CLIENTID app setting on the web app.
+#
+#   subject  — the identity's principal (object) ID
+#   audience — api://AzureADTokenExchange (the fixed token-exchange audience)
+# ---------------------------------------------------------------------------
+resource "azuread_application_federated_identity_credential" "easyauth_mi" {
+  application_id = azuread_application.main.id
+  display_name   = "easyauth-mi-${var.environment}"
+  audiences      = ["api://AzureADTokenExchange"]
+  issuer         = "https://login.microsoftonline.com/${var.tenant_id}/v2.0"
+  subject        = azurerm_user_assigned_identity.easyauth.principal_id
+}
+
+# Client secret — SUPERSEDED by the federated identity credential above.
+# auth_settings_v2 now authenticates with the managed identity; this secret is
+# kept dormant for one release as an instant rollback and is slated for removal
+# in a follow-up once the MI login is confirmed on dev. The far-future end_date
+# is left untouched so this dying secret isn't needlessly rotated on its way out.
 resource "azuread_application_password" "easyauth" {
   application_id = azuread_application.main.id
   display_name   = "easyauth-${var.environment}"

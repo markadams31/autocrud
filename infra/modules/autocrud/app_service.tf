@@ -6,6 +6,23 @@ resource "azurerm_service_plan" "main" {
   sku_name            = var.app_service_sku
 }
 
+# ---------------------------------------------------------------------------
+# Dedicated identity for EasyAuth's confidential-client login.
+#
+# Exists ONLY to back the federated identity credential on the app registration
+# (entra.tf), which lets EasyAuth authenticate its OAuth code exchange with a
+# managed-identity assertion instead of a client secret — nothing to store or
+# rotate. Kept SEPARATE from the app's system-assigned identity (which pulls from
+# ACR and reads SQL for reflection): the identity trusted to act as the login
+# client must not carry unrelated privileges. See Microsoft's "use a managed
+# identity instead of a secret" for App Service built-in auth.
+# ---------------------------------------------------------------------------
+resource "azurerm_user_assigned_identity" "easyauth" {
+  name                = module.naming.user_assigned_identity.name
+  resource_group_name = azurerm_resource_group.main.name
+  location            = azurerm_resource_group.main.location
+}
+
 resource "azurerm_linux_web_app" "main" {
   name                = local.linux_web_app_name
   resource_group_name = azurerm_resource_group.main.name
@@ -13,8 +30,15 @@ resource "azurerm_linux_web_app" "main" {
   service_plan_id     = azurerm_service_plan.main.id
   https_only          = true
 
+  # System-assigned identity: ACR pull (role assignment below) and schema
+  # reflection to Azure SQL (connection.py DefaultAzureCredential). Its
+  # principal_id is identity[0].principal_id even with a user-assigned identity
+  # also attached. User-assigned identity: dedicated to EasyAuth login — backs
+  # the federated credential (entra.tf) and is named in the
+  # OVERRIDE_USE_MI_FIC_ASSERTION_CLIENTID app setting below.
   identity {
-    type = "SystemAssigned"
+    type         = "SystemAssigned, UserAssigned"
+    identity_ids = [azurerm_user_assigned_identity.easyauth.id]
   }
 
   site_config {
@@ -78,8 +102,17 @@ resource "azurerm_linux_web_app" "main" {
     APPINSIGHTS_SAMPLING_RATIO                 = tostring(var.appinsights_sampling_ratio)
     ApplicationInsightsAgent_EXTENSION_VERSION = "~3"
 
-    # EasyAuth client secret — referenced by name in auth_settings_v2 below.
-    # Stored as an app setting so it never appears in the Terraform plan output.
+    # EasyAuth confidential-client credential.
+    #
+    # ACTIVE — the app's user-assigned identity, used as a federated credential
+    # (entra.tf) so EasyAuth authenticates its code exchange with a managed
+    # identity instead of a secret. App Service treats this specific setting name
+    # specially; auth_settings_v2.client_secret_setting_name points at it below.
+    OVERRIDE_USE_MI_FIC_ASSERTION_CLIENTID = azurerm_user_assigned_identity.easyauth.client_id
+
+    # DORMANT — the old client secret, retained one release as an instant
+    # rollback (flip client_secret_setting_name back to this name). Remove in a
+    # follow-up once the managed-identity login is confirmed on dev. See entra.tf.
     MICROSOFT_PROVIDER_AUTHENTICATION_SECRET = azuread_application_password.easyauth.value
   }
 
@@ -106,7 +139,7 @@ resource "azurerm_linux_web_app" "main" {
 
     active_directory_v2 {
       client_id                  = azuread_application.main.client_id
-      client_secret_setting_name = "MICROSOFT_PROVIDER_AUTHENTICATION_SECRET"
+      client_secret_setting_name = "OVERRIDE_USE_MI_FIC_ASSERTION_CLIENTID"
       tenant_auth_endpoint       = "https://login.microsoftonline.com/${var.tenant_id}/v2.0"
       allowed_audiences          = ["api://${azuread_application.main.client_id}"]
 
