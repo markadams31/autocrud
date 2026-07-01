@@ -50,6 +50,14 @@ repos:
         files: '(^|/)\.env($|\.)|\.tfvars$|\.tfstate(\.backup)?$'
         exclude: '\.(example|sample)$'
 
+  # ── Secret scanning · gitleaks · keys / tokens / connection strings ──────────
+  # Scans staged changes so a secret never lands in a commit. The Security
+  # workflow (.github/workflows/security.yml) re-scans full history as the backstop.
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.4
+    hooks:
+      - id: gitleaks
+
   # ── Backend · Python lint ────────────────────────────────────────────────────
   # ci.yml runs no ruff/mypy, so this is the only thing enforcing Python lint.
   # Default rule set (pyflakes F + pycodestyle E4/E7/E9) — low-noise, autofixed.
@@ -62,6 +70,16 @@ repos:
       # Formatting rewrites touched files — opt in once you're ready for it:
       # - id: ruff-format
       #   files: '^backend/.*\.py$'
+
+  # ── Backend · Python SAST · bandit (mirrors the Security workflow) ────────────
+  # Flags common security anti-patterns in application code; medium severity +
+  # confidence gate, inline `# nosec` respected, tests excluded via the filter.
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.8.0
+    hooks:
+      - id: bandit
+        args: ["--severity-level", "medium", "--confidence-level", "medium"]
+        files: '^backend/app/.*\.py$'
 
   # ── Frontend · lint · mirrors `npm run lint` in ci.yml ───────────────────────
   - repo: local
