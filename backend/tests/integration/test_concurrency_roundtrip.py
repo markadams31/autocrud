@@ -56,13 +56,15 @@ def test_stale_update_is_conflict(api):
     assert api.get(f"/api/dbo/Concurrent/{pk}").json()["Name"] == "b"
 
 
-def test_update_without_if_match_still_writes(api):
-    # A rowversion table still accepts a write that sends no If-Match (opt-in).
+def test_update_without_if_match_is_rejected(api):
+    # A rowversion table now REQUIRES If-Match — an unguarded write could silently
+    # overwrite a concurrent edit, so it's a 400 and the row is left unchanged.
     row = _create(api, "x")
     pk = row["ConcurrentID"]
     resp = api.patch(f"/api/dbo/Concurrent/{pk}", json={"Name": "y"})
-    assert resp.status_code == 200, resp.text
-    assert api.get(f"/api/dbo/Concurrent/{pk}").json()["Name"] == "y"
+    assert resp.status_code == 400
+    assert resp.json()["code"] == "BAD_REQUEST"
+    assert api.get(f"/api/dbo/Concurrent/{pk}").json()["Name"] == "x"
 
 
 def test_stale_delete_conflicts_then_fresh_delete_succeeds(api):
