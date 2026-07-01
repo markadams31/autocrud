@@ -86,3 +86,17 @@ export function trackEvent(name: string, properties?: EventProps): void {
 export function trackException(error: Error, properties?: EventProps): void {
   appInsights?.trackException({ exception: error }, properties)
 }
+
+/**
+ * Bucket a row count into a low-cardinality label for event dimensions, so
+ * telemetry stays cheap and aggregatable (no unbounded numeric values, which
+ * bloat cardinality without adding analytical value over ranges).
+ */
+export function sizeBucket(n: number): string {
+  if (n <= 0) return '0'
+  if (n === 1) return '1'
+  if (n <= 10) return '2-10'
+  if (n <= 100) return '11-100'
+  if (n <= 1000) return '101-1000'
+  return '1000+'
+}

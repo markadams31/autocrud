@@ -18,6 +18,7 @@ import {
 } from '@tanstack/react-query'
 
 import { api, encodePk } from '@/lib/api'
+import { sizeBucket, trackEvent } from '@/lib/telemetry'
 import type {
   BulkCreateRequest,
   BulkDeleteRequest,
@@ -304,7 +305,20 @@ export function useBulkDelete(schema: string, table: string) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (body: BulkDeleteRequest) => api.bulkDelete(schema, table, body),
-    onSuccess: () => invalidateTableWrites(qc, schema, table),
+    onSuccess: (res, body) => {
+      trackEvent('bulk_write', {
+        op: 'delete', schema, table,
+        target: body.all_matching ? 'all_matching' : 'ids',
+        count: sizeBucket(res.deleted), outcome: 'ok',
+      })
+      invalidateTableWrites(qc, schema, table)
+    },
+    onError: (err, body) =>
+      trackEvent('bulk_write', {
+        op: 'delete', schema, table,
+        target: body.all_matching ? 'all_matching' : 'ids',
+        outcome: 'error', code: (err as { code?: string }).code ?? 'error',
+      }),
   })
 }
 
@@ -318,7 +332,20 @@ export function useBulkUpdate(schema: string, table: string) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (body: BulkUpdateRequest) => api.bulkUpdate(schema, table, body),
-    onSuccess: () => invalidateTableWrites(qc, schema, table),
+    onSuccess: (res, body) => {
+      trackEvent('bulk_write', {
+        op: 'update', schema, table,
+        target: body.all_matching ? 'all_matching' : 'ids',
+        count: sizeBucket(res.updated), outcome: 'ok',
+      })
+      invalidateTableWrites(qc, schema, table)
+    },
+    onError: (err, body) =>
+      trackEvent('bulk_write', {
+        op: 'update', schema, table,
+        target: body.all_matching ? 'all_matching' : 'ids',
+        outcome: 'error', code: (err as { code?: string }).code ?? 'error',
+      }),
   })
 }
 

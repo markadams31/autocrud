@@ -31,6 +31,7 @@ import { Button } from '@/components/ui/button'
 import { SaveButton } from '@/components/save-button'
 import { useCelebrate } from '@/components/confetti'
 import { useBulkCreate } from '@/hooks/queries'
+import { sizeBucket, trackEvent } from '@/lib/telemetry'
 import type { FkLabelMap } from '@/hooks/queries'
 import { ApiError } from '@/lib/api'
 import { downloadCsv } from '@/lib/csv'
@@ -111,12 +112,25 @@ export function ImportDialog({ open, onOpenChange, meta, fkLabels, onImported }:
       { rows },
       {
         onSuccess: (res) => {
+          trackEvent('csv_import', {
+            schema: meta.schema, table: meta.name,
+            count: sizeBucket(res.created), outcome: 'ok',
+          })
           celebrate()
           toast.success(`Imported ${res.created} ${res.created === 1 ? 'record' : 'records'}.`)
           onImported(res.created)
           handleOpenChange(false)
         },
         onError: (err) => {
+          const rejected = err instanceof ApiError && (!!err.rows || err.row != null)
+          trackEvent('csv_import', {
+            schema: meta.schema, table: meta.name,
+            count: sizeBucket(rows.length),
+            outcome: rejected ? 'rejected' : 'error',
+            failed_rows:
+              err instanceof ApiError ? (err.rows ? Object.keys(err.rows).length : err.row != null ? 1 : 0) : 0,
+            code: err instanceof ApiError ? err.code : 'error',
+          })
           if (err instanceof ApiError && err.rows) {
             setAnalysis((a) => (a ? applyServerRowErrors(a, err.rows!) : a))
             toast.error('Some rows need fixing — see the highlighted cells.')

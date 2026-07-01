@@ -87,3 +87,19 @@ describe('trackEvent', () => {
     expect(trackEventMock).toHaveBeenCalledWith({ name: 'row_delete_undo' }, { raced: true })
   })
 })
+
+describe('sizeBucket', () => {
+  it('maps a count to a low-cardinality bucket (boundaries inclusive)', async () => {
+    const { sizeBucket } = await loadModule()
+    expect(sizeBucket(-5)).toBe('0')
+    expect(sizeBucket(0)).toBe('0')
+    expect(sizeBucket(1)).toBe('1')
+    expect(sizeBucket(2)).toBe('2-10')
+    expect(sizeBucket(10)).toBe('2-10')
+    expect(sizeBucket(11)).toBe('11-100')
+    expect(sizeBucket(100)).toBe('11-100')
+    expect(sizeBucket(101)).toBe('101-1000')
+    expect(sizeBucket(1000)).toBe('101-1000')
+    expect(sizeBucket(1001)).toBe('1000+')
+  })
+})
