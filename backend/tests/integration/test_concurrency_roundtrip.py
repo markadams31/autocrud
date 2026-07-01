@@ -83,3 +83,13 @@ def test_stale_delete_conflicts_then_fresh_delete_succeeds(api):
     # Current token deletes it.
     assert api.delete(f"/api/dbo/Concurrent/{pk}", headers={"If-Match": t2}).status_code == 200
     assert api.get(f"/api/dbo/Concurrent/{pk}").status_code == 404
+
+
+def test_free_text_search_skips_the_rowversion_column(api):
+    # Free-text search must skip the binary rowversion column (reflection tags it
+    # "text" via python_type), rather than LIKE it and throw 'string argument
+    # without an encoding'. Regression for the Project free-text search 500.
+    _create(api, "findme-xyz")
+    resp = api.post("/api/dbo/Concurrent/query", json={"search": "findme"})
+    assert resp.status_code == 200, resp.text
+    assert any(r["Name"] == "findme-xyz" for r in resp.json()["data"])

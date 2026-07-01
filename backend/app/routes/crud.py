@@ -261,6 +261,23 @@ def _require_comparable(sa_col) -> None:
         )
 
 
+def _is_likeable_column(sa_col) -> bool:
+    """
+    True for a genuine string column a LIKE can safely run against. A column's
+    is_text flag comes from the reflected python_type, which tags varbinary/
+    rowversion (bytes) and xml as "text" too — but a string LIKE against those
+    column *types* errors (binary raises 'string argument without an encoding';
+    xml → SQL error 8116). Free-text search re-checks the actual column type here
+    and searches only real string columns.
+    """
+    try:
+        if sa_col.type.python_type is not str:
+            return False
+    except (NotImplementedError, AttributeError):
+        return False
+    return "XML" not in type(sa_col.type).__name__.upper()
+
+
 def _filter_clause(sa_col, raw):
     """
     Build a WHERE clause for one column filter, or return None to skip it.
@@ -333,12 +350,19 @@ def _search_clause(table: TableInfo, search: str):
     term = search.strip()
     if not term:
         return None
-    text_cols = [col for col in table.columns if col.is_text]
-    if not text_cols:
-        return None
     t = table.sa_table
+    # is_text is set from the reflected python_type, which tags binary/rowversion
+    # and xml as "text" — but a LIKE against those column types errors. Re-check
+    # the actual column type and search only genuine string columns.
+    likeable = [
+        t.c[col.name]
+        for col in table.columns
+        if col.is_text and _is_likeable_column(t.c[col.name])
+    ]
+    if not likeable:
+        return None
     escaped = _escape_like(term)
-    return or_(*[t.c[col.name].like(f"%{escaped}%", escape="\\") for col in text_cols])
+    return or_(*[c.like(f"%{escaped}%", escape="\\") for c in likeable])
 
 
 def _query_where(table: TableInfo, search: str, filters: dict[str, Any]) -> list:
