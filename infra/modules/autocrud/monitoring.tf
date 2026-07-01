@@ -4,6 +4,7 @@ resource "azurerm_log_analytics_workspace" "main" {
   location            = azurerm_resource_group.main.location
   sku                 = "PerGB2018"
   retention_in_days   = var.log_retention_in_days
+  tags                = local.common_tags
 }
 
 resource "azurerm_application_insights" "main" {
@@ -12,6 +13,7 @@ resource "azurerm_application_insights" "main" {
   location            = azurerm_resource_group.main.location
   workspace_id        = azurerm_log_analytics_workspace.main.id
   application_type    = "web"
+  tags                = local.common_tags
 }
 
 # Stream the web app's platform logs to Log Analytics as a backstop to the

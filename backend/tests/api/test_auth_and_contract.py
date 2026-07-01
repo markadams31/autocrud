@@ -85,6 +85,22 @@ def test_health_503_when_database_unreachable(widget):
     assert resp.json()["code"] == "DATABASE_UNAVAILABLE"
 
 
+def test_database_is_reachable_skips_probe_when_disabled(monkeypatch):
+    # With HEALTH_CHECK_DATABASE off, /health degrades to liveness: the DB probe
+    # is skipped entirely so a serverless auto-pausing database isn't kept awake
+    # by the frequent health probe. Prove it never touches the engine by making
+    # any connection attempt explode — the flagged-off path must not reach it.
+    from app.routes import admin
+
+    def _fail():
+        raise AssertionError("DB probe must not run when HEALTH_CHECK_DATABASE is false")
+
+    monkeypatch.setattr(admin, "HEALTH_CHECK_DATABASE", False)
+    monkeypatch.setattr(admin.reflection_engine, "connect", _fail)
+
+    assert admin.database_is_reachable() is True
+
+
 def test_config_returns_app_insights_connection_string(snapshot_only):
     # /config feeds the frontend telemetry SDK. No snapshot/DB needed. In tests
     # no connection string is configured, so it's null — the frontend then no-ops.

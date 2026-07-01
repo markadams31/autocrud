@@ -17,11 +17,18 @@ resource "azurerm_mssql_server" "main" {
   minimum_tls_version = "1.2"
 
   # Entra-only auth — no SQL admin login or password anywhere in configuration.
+  # The admin is a security GROUP (entra.tf), not an individual, so administration
+  # is stable across applies and independent of who ran the last one. Members of
+  # the group are SQL admins; add DBAs there. On a local dev apply the deployer is
+  # added to the group (var.sql_admin_include_deployer) so it can run the
+  # contained-user provisioner below.
   azuread_administrator {
-    login_username              = "TerraformDeployer"
-    object_id                   = data.azurerm_client_config.current.object_id
+    login_username              = azuread_group.sql_admins.display_name
+    object_id                   = azuread_group.sql_admins.object_id
     azuread_authentication_only = true
   }
+
+  tags = local.common_tags
 }
 
 # Standard (paid) database — created with azurerm. Skipped when the free offer
@@ -37,7 +44,9 @@ resource "azurerm_mssql_database" "main" {
   # The provider silently ignores them for DTU-based SKUs.
   max_size_gb                 = var.sql_max_size_gb
   auto_pause_delay_in_minutes = var.sql_auto_pause_delay_minutes
-  min_capacity                = 0.5
+  min_capacity                = var.sql_min_capacity
+
+  tags = local.common_tags
 
   lifecycle {
     # The paid database is the prod path — guard against accidental deletion.
@@ -65,13 +74,14 @@ resource "azapi_resource" "sql_database_free" {
   name      = local.mssql_database_name
   parent_id = azurerm_mssql_server.main.id
   location  = azurerm_mssql_server.main.location
+  tags      = local.common_tags
 
   body = {
     sku = { name = var.sql_sku }
     properties = {
       maxSizeBytes                = var.sql_max_size_gb * 1024 * 1024 * 1024
       autoPauseDelay              = var.sql_auto_pause_delay_minutes
-      minCapacity                 = 0.5
+      minCapacity                 = var.sql_min_capacity
       useFreeLimit                = true
       freeLimitExhaustionBehavior = var.sql_free_limit_exhaustion_behavior
     }
@@ -156,21 +166,43 @@ resource "null_resource" "sql_contained_user" {
     interpreter = ["pwsh", "-Command"]
     # Uses az CLI to acquire an Azure SQL access token, then executes the
     # SQL via .NET SqlConnection — no sqlcmd dependency or version conflict.
+    #
+    # The connect is retried: the deployer's SQL admin rights come from
+    # membership in the admin group (entra.tf), and Entra can take a minute or
+    # two to propagate a just-added membership to the point where SQL Server
+    # accepts the token as admin — so a first apply can hit a transient
+    # "Login failed" before it settles. Re-acquiring the token each attempt
+    # keeps it fresh across the wait.
     command = <<-PWSH
       $ErrorActionPreference = 'Stop'
-      $token = (az account get-access-token --resource https://database.windows.net/ --query accessToken --output tsv).Trim()
-      if (-not $token) { throw 'Failed to acquire Azure SQL token. Run az login and retry.' }
-      $conn = New-Object System.Data.SqlClient.SqlConnection('Server=${azurerm_mssql_server.main.fully_qualified_domain_name};Database=${local.mssql_database_name};Encrypt=True;TrustServerCertificate=False;')
-      $conn.AccessToken = $token
-      $conn.Open()
-      $cmd = $conn.CreateCommand()
+      $server = '${azurerm_mssql_server.main.fully_qualified_domain_name}'
+      $database = '${local.mssql_database_name}'
+      $principal = '${azurerm_linux_web_app.main.name}'
       # Create the contained user once; GRANT VIEW DEFINITION every run (it's
       # idempotent) so a re-apply re-asserts it. VIEW DEFINITION is the identity's
       # only grant — see the comment block above for why db_datareader is omitted.
-      $cmd.CommandText = "IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = N'${azurerm_linux_web_app.main.name}') BEGIN CREATE USER [${azurerm_linux_web_app.main.name}] FROM EXTERNAL PROVIDER; END; GRANT VIEW DEFINITION TO [${azurerm_linux_web_app.main.name}];"
-      $cmd.ExecuteNonQuery() | Out-Null
-      $conn.Close()
-      Write-Host 'SQL contained user ready: ${azurerm_linux_web_app.main.name}'
+      $sql = "IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = N'$principal') BEGIN CREATE USER [$principal] FROM EXTERNAL PROVIDER; END; GRANT VIEW DEFINITION TO [$principal];"
+      $maxAttempts = 10
+      for ($i = 1; $i -le $maxAttempts; $i++) {
+        try {
+          $token = (az account get-access-token --resource https://database.windows.net/ --query accessToken --output tsv).Trim()
+          if (-not $token) { throw 'Failed to acquire Azure SQL token. Run az login and retry.' }
+          $conn = New-Object System.Data.SqlClient.SqlConnection("Server=$server;Database=$database;Encrypt=True;TrustServerCertificate=False;")
+          $conn.AccessToken = $token
+          $conn.Open()
+          $cmd = $conn.CreateCommand()
+          $cmd.CommandText = $sql
+          $cmd.ExecuteNonQuery() | Out-Null
+          $conn.Close()
+          Write-Host "SQL contained user ready: $principal"
+          break
+        } catch {
+          if ($i -eq $maxAttempts) { throw }
+          Write-Host "Attempt $i/$maxAttempts failed: $($_.Exception.Message)"
+          Write-Host 'Admin-group membership may still be propagating — retrying in 15s...'
+          Start-Sleep -Seconds 15
+        }
+      }
     PWSH
   }
 
@@ -180,5 +212,6 @@ resource "null_resource" "sql_contained_user" {
     azurerm_linux_web_app.main,
     azurerm_mssql_firewall_rule.deployer,
     azurerm_mssql_firewall_rule.allow_azure_services,
+    azuread_group_member.sql_admin_deployer,
   ]
 }

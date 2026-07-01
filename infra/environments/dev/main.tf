@@ -25,6 +25,17 @@ module "autocrud" {
   sql_use_free_limit                 = true
   sql_free_limit_exhaustion_behavior = "AutoPause"
 
+  # Skip the live DB round-trip in /health so the ~1/min App Service health probe
+  # doesn't keep this serverless database awake — it can then auto-pause when idle
+  # (conserving the free vCore-second allowance). Trades a cold start on the next
+  # real request, which is fine for dev. Prod keeps the full readiness check.
+  health_check_database = false
+
+  # Local dev applies run from an interactive `az login`, so add the deployer to
+  # the SQL admins group — it inherits admin and can run the contained-user
+  # provisioner. (In CI this would be false; dev is applied from the workstation.)
+  sql_admin_include_deployer = true
+
   # Uncomment to override other defaults:
   # app_name          = "autocrud"
   # location          = "australiaeast"
@@ -53,6 +64,7 @@ output "_5_deploy_command" { value = module.autocrud.deploy_command }
 # Identifiers — sort alphabetically, below the numbered commands.
 output "app_service_url" { value = module.autocrud.app_service_url }
 output "app_users_group_name" { value = module.autocrud.app_users_group_name }
+output "sql_admins_group_name" { value = module.autocrud.sql_admins_group_name }
 
 # Values for a local .env at the repo root. DB_DRIVER is a constant — see .env.example.
 output "env_db_server" { value = module.autocrud.env_db_server }
