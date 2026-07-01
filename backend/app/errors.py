@@ -32,21 +32,23 @@ builds an error response by hand, and no error path returns a different shape.
 
 On database errors
 ------------------
-The error CODE is chosen coarsely and class-based, on SQLAlchemy's exception
-types (not by parsing error numbers, which is fragile):
+The SQLAlchemy exception class is a coarse first cut — it conflates a denied
+grant with a text operator against an xml column (both ProgrammingError), and a
+bad filter value with a real overflow (both DataError). So the CODE is chosen
+from the SQL Server error number the ODBC driver reports, falling back to class:
 
-  IntegrityError   -> CONSTRAINT_VIOLATION   duplicate, FK, NOT NULL, CHECK
-  DataError        -> CONSTRAINT_VIOLATION   length / numeric / datetime overflow
-  ProgrammingError -> PERMISSION_DENIED      under OBO a denied grant is the
-                                              realistic cause; queries are
-                                              built from reflected metadata and
-                                              fully parameterised, so a genuine
-                                              malformed-SQL ProgrammingError
-                                              indicates a bug and would surface
-                                              in testing
-  OperationalError -> DATABASE_UNAVAILABLE   dropped connection, timeout, login
-                                              failure — transient/infra
-  anything else    -> INTERNAL_ERROR
+  permission denied (229/230/…)       -> PERMISSION_DENIED   a denied grant (403)
+  bad value/operator (8114/8116/245…) -> BAD_REQUEST         a client mistake: a
+                                                             bad number/date in a
+                                                             filter, LIKE on a
+                                                             binary/xml column,
+                                                             an uncoercible key
+  IntegrityError / other DataError    -> CONSTRAINT_VIOLATION duplicate, FK, NOT
+                                                             NULL, CHECK, overflow,
+                                                             truncation (409)
+  OperationalError                    -> DATABASE_UNAVAILABLE dropped connection,
+                                                             timeout, login (503)
+  anything else                       -> INTERNAL_ERROR
 
 For a CONSTRAINT_VIOLATION we then read a precise, human MESSAGE (and per-field
 detail) out of the driver text — see friendly_constraint_violation. This is an
@@ -328,18 +330,61 @@ def friendly_constraint_violation(
 # ---------------------------------------------------------------------------
 # Database exception mapping
 #
-# The class of the exception decides the CODE; for CONSTRAINT_VIOLATION we then
-# enrich the MESSAGE from the driver text (above). The one distinction worth
-# preserving is PERMISSION_DENIED, because database-enforced authorization is
-# the spine of the design and the frontend reacts differently to "you can't" vs
-# "it broke".
+# The SQLAlchemy exception CLASS is a coarse first cut, but it conflates cases
+# that need different HTTP codes: a denied grant and a text operator against an
+# xml column both arrive as ProgrammingError; a bad filter value and a real
+# overflow both arrive as DataError. So we read the SQL Server *error number*
+# (which the ODBC driver appends to the message) to separate:
+#
+#   - a genuine authorization failure        -> PERMISSION_DENIED (403)
+#   - a value/operator the DB can't run (a bad number/date in a filter, LIKE on
+#     a binary/xml column, an uncoercible key) -> BAD_REQUEST (400): a *client*
+#     mistake, not a permission failure or a data-rule conflict
+#   - a real data-rule rejection (FK/unique/NULL/CHECK/overflow/truncation)
+#     -> CONSTRAINT_VIOLATION (409), enriched with a precise message
+#   - a dropped connection/timeout           -> DATABASE_UNAVAILABLE (503)
+#   - anything else                          -> INTERNAL_ERROR (500)
 # ---------------------------------------------------------------------------
+
+# The ODBC driver appends the SQL Server native error number just before the
+# function name, e.g. "...of like function. (8116) (SQLExecDirectW)".
+_SQL_ERRNO_RE = re.compile(r"\((\d{2,6})\)\s*\(SQL\w+\)")
+
+# Authorization failures (a denied grant under the signed-in user's identity).
+# They surface as ProgrammingError/42000 — the same class as a malformed query —
+# so detect them by number, with the message text as a backstop.
+_PERMISSION_ERRORS = frozenset({229, 230, 262, 297, 300, 916, 6004, 10330})
+_PERMISSION_RE = re.compile(
+    r"permission (?:was )?denied"
+    r"|denied on (?:the )?(?:object|column|database|schema)"
+    r"|do(?:es)? not have permission"
+    r"|not able to access the database"
+    r"|cannot open database",
+    re.IGNORECASE,
+)
+
+# A value or operator the database can't process: conversion failures, type
+# clashes, a text operator on a non-text column. Client mistakes -> 400.
+#   206  operand type clash            402  types incompatible in operator
+#   241  date/time conversion failed   245  varchar→int/other conversion failed
+#   8114 error converting data type    8116 arg data type invalid for function
+_BAD_QUERY_ERRORS = frozenset({206, 241, 245, 402, 8114, 8116})
+
+
+def _sql_error_number(text: str) -> Optional[int]:
+    """The SQL Server native error number from an ODBC driver message, or None."""
+    m = _SQL_ERRNO_RE.search(text)
+    return int(m.group(1)) if m else None
+
 
 def map_database_exception(exc: Exception, sa_table: object = None) -> ApiError:
     """
     Translate a SQLAlchemy/DBAPI exception into a clean ApiError. `sa_table` (the
     statement's table, when available) lets a unique/FK violation name the exact
     form field.
+
+    The code is chosen from the SQL Server error number where the exception class
+    is ambiguous (see the section comment above), falling back to the class.
 
     Import of SQLAlchemy exception types is local to this function so that
     importing `errors` has no hard dependency on SQLAlchemy being present
@@ -349,18 +394,30 @@ def map_database_exception(exc: Exception, sa_table: object = None) -> ApiError:
         DataError,
         IntegrityError,
         OperationalError,
-        ProgrammingError,
     )
+
+    orig = getattr(exc, "orig", None)
+    text = str(orig) if orig is not None else str(exc)
+    number = _sql_error_number(text)
+
+    # A genuine authorization failure is a 403 whatever class it wears.
+    if number in _PERMISSION_ERRORS or _PERMISSION_RE.search(text):
+        return ApiError(ErrorCode.PERMISSION_DENIED)
+
+    # A value/operator the database can't run is a client mistake — a 400, not a
+    # permission failure (403) or a data-rule conflict (409).
+    if number in _BAD_QUERY_ERRORS:
+        return ApiError(
+            ErrorCode.BAD_REQUEST,
+            "The request contains a value or operator that can't be processed.",
+        )
 
     if isinstance(exc, (IntegrityError, DataError)):
         # The database's data rules rejected the write — duplicate key, FK, NOT
         # NULL, CHECK (IntegrityError); or a value the column can't hold, e.g.
         # string truncation / numeric overflow that Pydantic doesn't bound
-        # (DataError). Both are a clean 409. Read a precise reason where we can.
-        detail = None
+        # (DataError). A clean 409. Read a precise reason where we can.
         try:
-            orig = getattr(exc, "orig", None)
-            text = str(orig) if orig is not None else str(exc)
             detail = friendly_constraint_violation(text, _constraint_columns(sa_table))
         except Exception:
             detail = None
@@ -369,15 +426,10 @@ def map_database_exception(exc: Exception, sa_table: object = None) -> ApiError:
             return ApiError(ErrorCode.CONSTRAINT_VIOLATION, message, fields=fields)
         return ApiError(ErrorCode.CONSTRAINT_VIOLATION)
 
-    if isinstance(exc, ProgrammingError):
-        # Under OBO the realistic cause is a denied grant. (Verify against a
-        # low-privilege user: if permission errors surface as OperationalError
-        # in your stack instead, move this check ahead of that branch.)
-        return ApiError(ErrorCode.PERMISSION_DENIED)
-
     if isinstance(exc, OperationalError):
         # Connection dropped, timeout, login failure — transient/infra.
         return ApiError(ErrorCode.DATABASE_UNAVAILABLE)
 
-    # Not a database exception we model — let it surface as internal.
+    # An unattributed ProgrammingError means our generated SQL is malformed — a
+    # bug, not a client or permission problem — so it surfaces as internal.
     return ApiError(ErrorCode.INTERNAL_ERROR)
