@@ -109,7 +109,7 @@ jobs:
             --name "$APP_NAME" --resource-group "$RESOURCE_GROUP" \
             --container-image-name "${{ steps.current.outputs.previous }}"
           host=$(az webapp show --name "$APP_NAME" --resource-group "$RESOURCE_GROUP" --query defaultHostName -o tsv)
-          for i in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "https://$host/health" || echo 000)
             if [ "$code" = "200" ]; then echo "Rolled back and healthy"; exit 0; fi
             sleep 10

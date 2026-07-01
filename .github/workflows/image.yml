@@ -97,9 +97,11 @@ jobs:
       - name: Image reference
         id: image
         run: |
-          echo "image=${{ steps.reg.outputs.server }}/autocrud" >> "$GITHUB_OUTPUT"
-          echo "digest=${{ steps.build.outputs.digest }}" >> "$GITHUB_OUTPUT"
-          echo "ref=${{ steps.reg.outputs.server }}/autocrud@${{ steps.build.outputs.digest }}" >> "$GITHUB_OUTPUT"
+          {
+            echo "image=${{ steps.reg.outputs.server }}/autocrud"
+            echo "digest=${{ steps.build.outputs.digest }}"
+            echo "ref=${{ steps.reg.outputs.server }}/autocrud@${{ steps.build.outputs.digest }}"
+          } >> "$GITHUB_OUTPUT"
           echo "Built ${{ steps.reg.outputs.server }}/autocrud@${{ steps.build.outputs.digest }}"
 
       # GATE: scan the exact digest that will ship. Fail on FIXABLE High/Critical
