@@ -65,6 +65,9 @@ def test_health_ok_when_snapshot_loaded(widget):
     body = resp.json()
     assert body["status"] == "ok"
     assert body["tables"] == 1
+    # Echoes the build SHA so the deploy smoke check can confirm the new container
+    # is serving the SHA it shipped ("dev" outside a CI-built image).
+    assert isinstance(body["sha"], str) and body["sha"]
 
 
 def test_health_503_when_database_unreachable(widget):

@@ -166,6 +166,11 @@ def health(db_reachable: bool = Depends(database_is_reachable)) -> dict:
     Returns 503 if the snapshot is missing (startup still in progress or failed)
     or if the database can't be reached — so App Service stops routing traffic
     to an instance that can't actually serve data.
+
+    Also echoes the running build's commit SHA (see app.build_info). /health is
+    anonymous, so the deploy pipeline's smoke check can poll it to confirm the
+    NEW container is serving the SHA it just shipped — /version carries the same
+    value but sits behind EasyAuth, out of reach of an unauthenticated probe.
     """
     try:
         snapshot = get_snapshot()
@@ -182,7 +187,7 @@ def health(db_reachable: bool = Depends(database_is_reachable)) -> dict:
             "Database is not reachable.",
         )
 
-    return {"status": "ok", "tables": len(snapshot.tables)}
+    return {"status": "ok", "tables": len(snapshot.tables), "sha": build_info.BUILD_SHA}
 
 
 @router.get("/version")
