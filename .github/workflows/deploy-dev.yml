@@ -18,6 +18,7 @@ on:
 permissions:
   contents: read
   id-token: write # OIDC token is minted under the caller's grant (used by deploy.yml)
+  attestations: write # SBOM + SLSA provenance attestations (written in deploy.yml)
   pull-requests: read # caller must grant what the called ci.yml's change-detection job requests
 
 concurrency:

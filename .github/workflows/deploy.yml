@@ -40,8 +40,9 @@ jobs:
       name: ${{ inputs.environment }}
       url: https://${{ vars.APP_NAME }}.azurewebsites.net
     permissions:
-      id-token: write # required for OIDC azure/login
+      id-token: write # OIDC for azure/login + Sigstore keyless signing
       contents: read
+      attestations: write # write SLSA provenance + SBOM attestations for the image
     env:
       ACR_NAME: ${{ vars.ACR_NAME }}
       APP_NAME: ${{ vars.APP_NAME }}
@@ -72,6 +73,57 @@ jobs:
             --build-arg "GIT_SHA=$IMAGE_TAG" \
             --build-arg "BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             .
+
+      # ── Supply chain: SBOM + signed SLSA provenance for the built image ───────
+      # Bind everything to the immutable digest (both tags point at it) so the
+      # SBOM and attestations describe the exact artifact, not a moveable tag.
+      - name: Resolve image digest
+        id: image
+        if: ${{ inputs.build }}
+        run: |
+          login_server=$(az acr show --name "$ACR_NAME" --query loginServer -o tsv)
+          digest=$(az acr repository show \
+            --name "$ACR_NAME" --image "autocrud:$IMAGE_TAG" \
+            --query digest -o tsv)
+          echo "image=$login_server/autocrud" >> "$GITHUB_OUTPUT"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "Built $login_server/autocrud@$digest"
+
+      # Registry login so syft can pull the image manifest/layers to inventory.
+      - name: Log in to ACR (for the image scan)
+        if: ${{ inputs.build }}
+        run: az acr login --name "$ACR_NAME"
+
+      # Generate a Software Bill of Materials from the pushed image (syft) and
+      # keep it as a workflow artifact for the record.
+      - name: Generate SBOM (SPDX)
+        if: ${{ inputs.build }}
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: ${{ steps.image.outputs.image }}@${{ steps.image.outputs.digest }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+          upload-artifact: true
+          artifact-name: sbom-${{ inputs.image_tag }}.spdx.json
+
+      # Sign a SLSA build-provenance attestation for the image — keyless via the
+      # job's OIDC token (Sigstore/Fulcio), recorded in the Rekor transparency
+      # log. Verify with: gh attestation verify oci://<image>@<digest> --owner <org>
+      - name: Attest build provenance (SLSA)
+        if: ${{ inputs.build }}
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-name: ${{ steps.image.outputs.image }}
+          subject-digest: ${{ steps.image.outputs.digest }}
+
+      # Sign an SBOM attestation binding the SBOM above to the same image digest.
+      - name: Attest SBOM
+        if: ${{ inputs.build }}
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-name: ${{ steps.image.outputs.image }}
+          subject-digest: ${{ steps.image.outputs.digest }}
+          sbom-path: sbom.spdx.json
 
       # Point the App Service at the immutable tag (clean rollback target).
       # Changing the container image config already triggers the restart +
