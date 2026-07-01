@@ -9,7 +9,7 @@ import pytest
 from sqlalchemy import Column, Integer, LargeBinary, String
 
 from app.errors import ApiError, ErrorCode
-from app.routes.crud import _filter_clause
+from app.routes.crud import _filter_clause, _is_likeable_column
 
 
 def _col(type_):
@@ -55,3 +55,13 @@ def test_text_column_still_filters(raw):
 def test_numeric_column_still_filters():
     assert _filter_clause(_col(Integer()), {"op": "gt", "value": 5}) is not None
     assert _filter_clause(_col(Integer()), 5) is not None
+
+
+# ── Free-text search: only genuine string columns are LIKE-able ──────────────
+
+def test_is_likeable_only_true_for_string_columns():
+    # Real string columns are searchable; binary/rowversion (bytes) and numbers
+    # are not — searching them would throw at the driver (see _search_clause).
+    assert _is_likeable_column(_col(String(50))) is True
+    assert _is_likeable_column(_col(LargeBinary())) is False
+    assert _is_likeable_column(_col(Integer())) is False
