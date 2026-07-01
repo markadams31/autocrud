@@ -77,6 +77,16 @@ version's mssql dialect doesn't export a HIERARCHYID type to check
 against. If your schema uses it, add it to _EXCLUDED_WRITE_TYPES once
 a newer SQLAlchemy version exports the type.
 
+VECTOR (Azure SQL / SQL Server 2025) is likewise not a built-in the mssql
+dialect knows, so it would reflect as an unrecognised type (NullType) and land
+as an EDITABLE text field over a raw embedding — which a client can't
+meaningfully hand-edit and a write would corrupt. Rather than special-case it,
+app.mssql_types registers a VECTOR type in the dialect's reflection map, so it
+reflects as a real type and is then EXCLUDED here by isinstance like binary/XML.
+Unlike HIERARCHYID (still NullType→EDITABLE until the dialect exports it), VECTOR
+is handled today via that one-line registration. Embeddings are machine-
+generated; surfacing them read-only is the correct generic behaviour.
+
 Decimal handling
 -----------------
 DECIMAL/NUMERIC/MONEY/SMALLMONEY map to Python Decimal, never float,
@@ -105,6 +115,10 @@ from sqlalchemy.dialects.mssql import (
 
 from app.config import DB_SCHEMAS, DB_AUDIT_COLUMNS
 from app.connection import reflection_engine, _connect_with_retry
+# Importing this registers VECTOR (and any future types) into the mssql dialect's
+# reflection map, so metadata.reflect() below produces a typed VECTOR column
+# instead of NullType — and VECTOR then classifies like any other excluded type.
+from app.mssql_types import VECTOR
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +153,7 @@ _EXCLUDED_WRITE_TYPES = (
     VARBINARY, BINARY, IMAGE, TIMESTAMP,  # binary / rowversion
     XML,                                   # structured-but-opaque
     SQL_VARIANT,                           # no fixed shape
+    VECTOR,                                # machine-generated embedding (read-only)
 )
 
 _UNREPRESENTABLE_TYPES = (SQL_VARIANT,)
@@ -196,6 +211,12 @@ def _classify(
 ) -> ColumnKind:
     """
     Classify a column as EXCLUDED, DB_OWNED, or EDITABLE.
+
+    EXCLUDED is decided by type (_EXCLUDED_WRITE_TYPES): binary/rowversion, XML,
+    sql_variant, and VECTOR. VECTOR isn't a built-in the dialect knows, so it's
+    registered for reflection in app.mssql_types — once reflected as a real type,
+    it's excluded here by isinstance like all the others. Excluding wins over
+    every other category — an unwritable type is never client-writable.
 
     DB_OWNED is reached two ways:
       - Structural (_is_db_owned): identity, computed, a value-generating
@@ -407,6 +428,10 @@ def _column_flags(conn, schemas: list[str]) -> _ColumnFlags:
 
     GENERATED ALWAYS period columns (ROW START / ROW END) and computed columns are
     both rejected by SQL Server on any explicit write, so both are DB_OWNED.
+
+    Note this is for the privilege-gated *flag* gaps only — facts reflection can't
+    see without VIEW DEFINITION. An unknown *type* like VECTOR is handled the other
+    way, by registering it for reflection (app.mssql_types), not read here.
     """
     stmt = text("""
         SELECT s.name, t.name, c.name,
@@ -707,6 +732,8 @@ def _build_column_info(
         name=col.name,
         kind=kind,
         python_type=_python_type(col),
+        # str(col.type) is correct for VECTOR too: it reflects as a real VECTOR type
+        # now (registered in app.mssql_types), so this reads "VECTOR", not "NULL".
         sql_type=str(col.type),
         nullable=bool(col.nullable),
         is_primary_key=col.primary_key,
@@ -812,7 +839,8 @@ def reflect_schemas() -> ReflectedSchema:
             skipped_no_pk.append(f"{schema}.{table.name}")
             continue
         tables[(schema, table.name)] = _build_table_info(
-            schema, table, flags.generated_always, fk_map, flags.computed, flags.defaulted
+            schema, table, flags.generated_always, fk_map,
+            flags.computed, flags.defaulted,
         )
 
     if skipped_no_pk:
