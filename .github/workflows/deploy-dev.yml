@@ -5,8 +5,12 @@ name: Deploy · dev
 # it by immutable digest (deploy.yml). That same digest is what prod promotes —
 # nothing downstream is rebuilt.
 on:
-  push:
-    branches: [main]
+  # DISABLED — dev backend infrastructure is not currently provisioned (no ACR /
+  # App Service), so an automatic deploy on merge to main would fail at the Azure
+  # login / build step. Re-enable this push trigger once `terraform apply` has
+  # stood up the dev environment.
+  # push:
+  #   branches: [main]
   # Manual redeploy / rollback: supply a full image ref already in ACR
   # (registry/autocrud@sha256:...) to repoint dev at it without rebuilding.
   # Blank = build + deploy HEAD.

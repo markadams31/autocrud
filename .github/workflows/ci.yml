@@ -130,6 +130,30 @@ jobs:
       - name: Run unit + API tests
         run: uv run pytest -m "not integration"
 
+  backend-types:
+    name: Backend · type check (pyright)
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync --extra test
+      # Run pyright through uv so it type-checks against the app's real
+      # SQLAlchemy/Pydantic types; config lives in [tool.pyright] (pyproject.toml).
+      - name: Type-check (pyright)
+        run: uv run pyright
+
   backend-integration:
     name: Backend · integration (real SQL Server)
     needs: changes
@@ -303,6 +327,7 @@ jobs:
       - changes
       - actionlint
       - backend-tests
+      - backend-types
       - backend-integration
       - frontend-checks
       - frontend-e2e

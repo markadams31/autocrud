@@ -45,7 +45,7 @@ from sqlalchemy.engine import Connection
 
 from app import config
 from app.dependencies import get_db, get_snapshot, get_table
-from app.errors import ApiError, ErrorCode
+from app.errors import ApiError, ErrorCode, map_database_exception
 from app.reflection import ColumnInfo, ReflectedSchema, TableInfo
 
 logger = logging.getLogger(__name__)
@@ -207,10 +207,15 @@ def list_tables(
     try:
         rows = db.execute(perm_query, params).fetchall()
     except Exception as e:
-        logger.warning("Permission check failed for schema '%s': %s", schema, e)
-        # If the permission query itself fails, return an empty list rather
-        # than a 500 — the user simply sees no tables.
-        return {"schema": schema, "tables": []}
+        # HAS_PERMS_BY_NAME reports a denied grant as a 0/1 value, never as an
+        # exception — so a raised error here is a genuine fault (dropped
+        # connection, catalog error), not "no permission". Surface it instead of
+        # masking it as an empty sidebar; the frontend renders the mapped error
+        # and offers a retry.
+        logger.error(
+            "Permission check failed for schema '%s': %s", schema, getattr(e, "orig", e)
+        )
+        raise map_database_exception(e)
 
     # Build a lookup: table_name -> {can_select, can_insert, ...}
     perms: dict[str, dict] = {}
@@ -360,13 +365,22 @@ def get_options(
     try:
         rows = db.execute(stmt).fetchall()
     except Exception as e:
-        # Most likely the user lacks SELECT on the target table.
-        # Return empty list — dropdown shows no options rather than erroring.
+        # A missing SELECT grant on the target is expected — degrade to an empty
+        # dropdown. Anything else (a real driver/query fault) is NOT masked:
+        # surface it so the actual problem is visible, not hidden behind a
+        # silently empty list.
+        mapped = map_database_exception(e)
+        if mapped.code is ErrorCode.PERMISSION_DENIED:
+            logger.debug(
+                "options: no SELECT on '%s.%s' — returning empty list",
+                fk_schema, fk_table,
+            )
+            return []
         logger.warning(
-            "options: failed to fetch from '%s.%s': %s",
-            fk_schema, fk_table, e,
+            "options: fetch from '%s.%s' failed: %s",
+            fk_schema, fk_table, getattr(e, "orig", e),
         )
-        return []
+        raise mapped
 
     return [
         {

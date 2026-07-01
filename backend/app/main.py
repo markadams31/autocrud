@@ -107,20 +107,22 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 class _AppEncoder(json.JSONEncoder):
-    def default(self, obj: Any) -> Any:
-        if isinstance(obj, Decimal):
-            return str(obj)
-        if isinstance(obj, datetime.datetime):
-            return obj.isoformat()
-        if isinstance(obj, datetime.date):
-            return obj.isoformat()
-        if isinstance(obj, datetime.time):
-            return obj.isoformat()
-        if isinstance(obj, UUID):
-            return str(obj)
-        if isinstance(obj, (bytes, bytearray, memoryview)):
-            return bytes(obj).hex()
-        return super().default(obj)
+    # Parameter is named `o` to match json.JSONEncoder.default's signature exactly
+    # (an override with a different parameter name is technically incompatible).
+    def default(self, o: Any) -> Any:
+        if isinstance(o, Decimal):
+            return str(o)
+        if isinstance(o, datetime.datetime):
+            return o.isoformat()
+        if isinstance(o, datetime.date):
+            return o.isoformat()
+        if isinstance(o, datetime.time):
+            return o.isoformat()
+        if isinstance(o, UUID):
+            return str(o)
+        if isinstance(o, (bytes, bytearray, memoryview)):
+            return bytes(o).hex()
+        return super().default(o)
 
 
 class AppJSONResponse(JSONResponse):
