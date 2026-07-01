@@ -18,6 +18,12 @@ import {
 
 import { FieldControl } from '@/components/field-control'
 import { ForeignKeyCell } from '@/components/foreign-key-cell'
+import { Badge } from '@/components/ui/badge'
+import {
+  HoverCard,
+  HoverCardContent,
+  HoverCardTrigger,
+} from '@/components/ui/hover-card'
 import { TableHead } from '@/components/ui/table'
 import type { FkLabelMap } from '@/hooks/queries'
 import { convertFieldValue, toInputValue, type FormValue } from '@/lib/field-values'
@@ -146,7 +152,12 @@ export function Cell({
   )
 }
 
-/** A sortable column header; clicking cycles the sort for its column. */
+/**
+ * A sortable column header. Clicking cycles the sort for its column; hovering
+ * or keyboard-focusing it opens a card with the column's full metadata
+ * (ColumnMetaCard). The card replaces the old native `title` tooltip — richer,
+ * and keyboard/screen-reader accessible via the base-ui preview-card.
+ */
 export function HeaderCell({
   column,
   sort,
@@ -166,27 +177,78 @@ export function HeaderCell({
         numeric && 'text-right',
       )}
     >
-      <button
-        type="button"
-        onClick={() => onSort(column.name)}
-        className={cn(
-          'group/sort -mx-1 inline-flex max-w-full items-center gap-1 rounded px-1 py-0.5 text-xs font-semibold tracking-wide uppercase transition-colors group-hover/head:text-foreground',
-          numeric && 'flex-row-reverse',
-          active ? 'text-foreground' : 'text-muted-foreground',
-        )}
-        title={`${column.field_type}${column.nullable ? ' · nullable' : ''}${column.foreign_key ? ` · → ${column.foreign_key.table}` : ''}`}
-      >
-        {column.is_primary_key && <KeyRoundIcon className="size-3 shrink-0 text-muted-foreground" />}
-        <span className="truncate">{fieldLabel(column)}</span>
-        <Icon
-          className={cn(
-            'size-3 shrink-0 transition-all duration-150',
-            active
-              ? 'opacity-100'
-              : 'opacity-0 -translate-x-0.5 group-hover/head:translate-x-0 group-hover/head:opacity-60',
-          )}
-        />
-      </button>
+      <HoverCard>
+        <HoverCardTrigger
+          render={
+            <button
+              type="button"
+              onClick={() => onSort(column.name)}
+              aria-label={`Sort by ${fieldLabel(column)}`}
+              className={cn(
+                'group/sort -mx-1 inline-flex max-w-full items-center gap-1 rounded px-1 py-0.5 text-xs font-semibold tracking-wide uppercase transition-colors group-hover/head:text-foreground',
+                numeric && 'flex-row-reverse',
+                active ? 'text-foreground' : 'text-muted-foreground',
+              )}
+            />
+          }
+        >
+          {column.is_primary_key && <KeyRoundIcon className="size-3 shrink-0 text-muted-foreground" />}
+          <span className="truncate">{fieldLabel(column)}</span>
+          <Icon
+            className={cn(
+              'size-3 shrink-0 transition-all duration-150',
+              active
+                ? 'opacity-100'
+                : 'opacity-0 -translate-x-0.5 group-hover/head:translate-x-0 group-hover/head:opacity-60',
+            )}
+          />
+        </HoverCardTrigger>
+        <HoverCardContent side="bottom" align="start" className="w-64">
+          <ColumnMetaCard column={column} />
+        </HoverCardContent>
+      </HoverCard>
     </TableHead>
+  )
+}
+
+/**
+ * The header hover-card body: the column's full metadata. Boolean facts show as
+ * badges (primary/foreign key, required, read-only); the rest as labelled rows.
+ * Reads entirely from the already-fetched ColumnMeta — no extra request.
+ */
+function ColumnMetaCard({ column }: { column: ColumnMeta }) {
+  const readOnly = !column.editable
+  const fk = column.foreign_key
+  return (
+    <div className="space-y-2.5">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <p className="font-heading mr-auto text-sm font-semibold break-all">{column.name}</p>
+        {column.is_primary_key && <Badge variant="secondary">Primary key</Badge>}
+        {fk && <Badge variant="secondary">Foreign key</Badge>}
+        {column.required && <Badge variant="secondary">Required</Badge>}
+        {readOnly && <Badge variant="outline">Read-only</Badge>}
+      </div>
+      <dl className="space-y-1.5 text-xs">
+        <MetaRow label="Type" value={column.sql_type ?? column.field_type} />
+        <MetaRow label="Nullable" value={column.nullable ? 'Yes' : 'No'} />
+        {fk && <MetaRow label="References" value={`${fk.schema}.${fk.table}.${fk.column}`} />}
+        {readOnly && (
+          <MetaRow
+            label="Managed by"
+            value={column.is_audit ? 'the database (audit)' : 'the database'}
+          />
+        )}
+      </dl>
+    </div>
+  )
+}
+
+/** One label/value row inside ColumnMetaCard. */
+function MetaRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-baseline justify-between gap-3">
+      <dt className="shrink-0 text-muted-foreground">{label}</dt>
+      <dd className="min-w-0 truncate text-right font-medium">{value}</dd>
+    </div>
   )
 }

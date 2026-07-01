@@ -32,6 +32,12 @@ export interface ForeignKeyRef {
 export interface ColumnMeta {
   name: string
   field_type: FieldType
+  /**
+   * Precise SQL Server type for display, e.g. "NVARCHAR(255)" or "DECIMAL(18, 2)".
+   * Always present from the backend; optional only so lightweight test fixtures
+   * can omit it (the header card falls back to field_type).
+   */
+  sql_type?: string
   nullable: boolean
   /** Client MUST supply this on create (NOT NULL, no default, not auto-PK). */
   required: boolean
