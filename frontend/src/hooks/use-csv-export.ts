@@ -17,6 +17,7 @@ import type { FkLabelMap } from '@/hooks/queries'
 import { api } from '@/lib/api'
 import { downloadCsv, toCsv } from '@/lib/csv'
 import { messageFor } from '@/lib/errors'
+import { sizeBucket, trackEvent } from '@/lib/telemetry'
 import type { ColumnMeta, QueryRequest, Row, TableMeta } from '@/types'
 
 // Upper bound on a full-result export. The browser pulls the whole set into
@@ -53,6 +54,7 @@ export function useCsvExport(params: CsvExportParams): CsvExport {
   function exportPage() {
     if (!meta || rows.length === 0) return
     downloadCsv(`${schema}.${table}.csv`, toCsv(visibleColumns, rows, fkLabels))
+    trackEvent('csv_export', { schema, table, scope: 'page', count: sizeBucket(rows.length), outcome: 'ok' })
     toast.success(`Exported ${rows.length} row${rows.length === 1 ? '' : 's'}.`)
   }
 
@@ -64,6 +66,7 @@ export function useCsvExport(params: CsvExportParams): CsvExport {
     if (!meta) return
     if (total === 0) return
     if (total > EXPORT_MAX_ROWS) {
+      trackEvent('csv_export', { schema, table, scope: 'all', count: sizeBucket(total), outcome: 'over_limit' })
       toast.error(
         `That's ${total.toLocaleString()} rows — over the ${EXPORT_MAX_ROWS.toLocaleString()} ` +
           `export limit. Narrow your search or filters and try again.`,
@@ -81,8 +84,10 @@ export function useCsvExport(params: CsvExportParams): CsvExport {
         all.push(...res.data)
       }
       downloadCsv(`${schema}.${table}.csv`, toCsv(visibleColumns, all, fkLabels))
+      trackEvent('csv_export', { schema, table, scope: 'all', count: sizeBucket(all.length), outcome: 'ok' })
       toast.success(`Exported ${all.length} row${all.length === 1 ? '' : 's'}.`)
     } catch (err) {
+      trackEvent('csv_export', { schema, table, scope: 'all', outcome: 'error' })
       toast.error(messageFor(err, 'Could not export the rows.'))
     } finally {
       setExporting(false)
