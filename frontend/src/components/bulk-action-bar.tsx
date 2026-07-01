@@ -45,13 +45,12 @@ export function BulkActionBar({
   onDelete,
 }: BulkActionBarProps) {
   return (
-    <motion.div
+    <motion.section
       initial={{ opacity: 0, y: -6 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -6 }}
       transition={{ duration: 0.18, ease: easeOutExpo }}
       className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border bg-accent/40 px-3 py-2 text-sm shadow-sm"
-      role="region"
       aria-label="Bulk actions"
     >
       <span className="font-medium tabular-nums">
@@ -90,6 +89,6 @@ export function BulkActionBar({
           Clear
         </Button>
       </div>
-    </motion.div>
+    </motion.section>
   )
 }

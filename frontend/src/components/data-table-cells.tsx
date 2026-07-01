@@ -57,6 +57,9 @@ export function EditableCell({
   const commitOnChange = column.field_type === 'boolean'
 
   return (
+    // Keyboard coordinator around the focusable FieldControl input (Enter commits,
+    // Escape cancels, blur commits) — not itself an interactive control.
+    // eslint-disable-next-line jsx-a11y/no-static-element-interactions
     <div
       className="-my-1"
       onKeyDown={(e) => {

@@ -185,6 +185,7 @@ export function RecordForm({ meta, mode, row, onClose, onSaved }: RecordFormProp
           {editableColumns.map((column) => {
             const error = errors[column.name]
             const fieldId = `field-${column.name}`
+            const errorId = `${fieldId}-error`
             return (
               <motion.div key={column.name} variants={listItem} className="space-y-1.5">
                 <Label htmlFor={fieldId} className="gap-1.5">
@@ -208,9 +209,14 @@ export function RecordForm({ meta, mode, row, onClose, onSaved }: RecordFormProp
                   schema={meta.schema}
                   table={meta.name}
                   invalid={!!error}
+                  describedBy={error ? errorId : undefined}
                   autoFocus={column.name === firstFieldName}
                 />
-                {error && <p className="text-xs text-destructive">{error}</p>}
+                {error && (
+                  <p id={errorId} className="text-xs text-destructive">
+                    {error}
+                  </p>
+                )}
               </motion.div>
             )
           })}

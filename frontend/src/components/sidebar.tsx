@@ -77,6 +77,7 @@ function SchemaGroup({
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
         className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-semibold tracking-wide text-sidebar-foreground/70 uppercase transition-colors outline-none hover:bg-sidebar-accent/40 hover:text-sidebar-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
       >
         <ChevronRightIcon

@@ -17,7 +17,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
-import { PencilIcon } from 'lucide-react'
+import { EyeIcon, PencilIcon } from 'lucide-react'
 
 import { AnimatedTrash } from '@/components/animated-trash'
 import { Cell, EditableCell, HeaderCell, type SortState } from '@/components/data-table-cells'
@@ -128,7 +128,10 @@ export function DataTable({
   table,
   onCellEdit,
 }: DataTableProps) {
-  const showActions = permissions.update || permissions.delete
+  // The actions column is always present: every row offers a keyboard-reachable
+  // "View" control (opening the read-only detail), so that action isn't available
+  // by mouse-only row click alone. Edit/Delete are added when the user is allowed.
+  const showActions = true
   // Row padding follows the density preference.
   const densityPad = density === 'compact' ? 'py-1' : 'py-2.5'
 
@@ -186,9 +189,9 @@ export function DataTable({
 
   // Pre-compute fixed widths so the table never reflows as content changes.
   const widths = columns.map(columnWidth)
-  const actionWidth = showActions
-    ? ((permissions.update ? 1 : 0) + (permissions.delete ? 1 : 0)) * 34 + 16
-    : 0
+  // One column per action button: View (always) + Edit/Delete when allowed.
+  const actionWidth =
+    (1 + (permissions.update ? 1 : 0) + (permissions.delete ? 1 : 0)) * 34 + 16
   const selectWidth = selection ? SELECT_COL_WIDTH : 0
   const minWidth = widths.reduce((sum, w) => sum + w, 0) + actionWidth + selectWidth
 
@@ -347,10 +350,28 @@ export function DataTable({
                         'w-0 bg-card p-1 shadow-[inset_1px_0_0_var(--border)] transition-colors group-hover:bg-[var(--row-hover)] group-active:bg-[var(--row-active)]',
                       )}
                     >
+                      {/* Non-interactive wrapper: stops the row-open click from
+                          firing when its child buttons are activated. */}
+                      {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions, jsx-a11y/click-events-have-key-events */}
                       <div
                         className="flex items-center justify-end gap-0.5 opacity-70 transition-opacity duration-200 group-hover:opacity-100"
                         onClick={(e) => e.stopPropagation()}
                       >
+                        <Tooltip>
+                          <TooltipTrigger
+                            render={
+                              <Button
+                                variant="ghost"
+                                size="icon-sm"
+                                onClick={() => onRowClick(row)}
+                                aria-label="View details"
+                              />
+                            }
+                          >
+                            <EyeIcon />
+                          </TooltipTrigger>
+                          <TooltipContent>View</TooltipContent>
+                        </Tooltip>
                         {permissions.update && (
                           <Tooltip>
                             <TooltipTrigger
