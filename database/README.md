@@ -207,23 +207,32 @@ do.
 
 ## Part 4 — Row-level need-to-know (RLS, optional)
 
-Sometimes a user may see only *some* rows of a table — their own records, their team's, or
-rows at or below their classification. SQL Server **Row-Level Security (RLS)** enforces that in
-the database, and — like the patterns above — it is **transparent to the app**: every query
-the app runs as the signed-in user (the grid, pagination, FK dropdowns, CSV export, even
-"all-matching" bulk operations) automatically returns, and counts, only the permitted rows.
-Nothing in the application changes.
+Some tables need per-row access, not just per-table: a user should see only their own records,
+their team's, or rows at or below their classification. SQL Server **Row-Level Security (RLS)**
+enforces this in the database. Because the app runs every query as the signed-in user, RLS is
+transparent to it — the grid, pagination, foreign-key dropdowns, export, and bulk operations
+all return only the rows that user may see, with no change to the application.
 
-**The one thing that matters here:** the predicate must key on **`SUSER_SNAME()`** — the
-individual signed-in user — **not `USER_NAME()`**. App users authenticate individually (OBO)
-but map to a *shared* Entra-group database user, so `USER_NAME()` is the same group for
-everyone (useless for per-user filtering), while `SUSER_SNAME()` is the individual — the same
-identity the audit trigger uses. (Verified against a live database: with the policy on a user
-sees only their own rows, with it off all rows — and it applies even to `db_owner`.)
+**Key the predicate on the identity that matches your access boundary.** RLS predicates run as
+the signed-in user, and SQL Server exposes that identity at two granularities — pick the one
+your rule is about:
+
+- **The individual** — `SUSER_SNAME()`, the real signed-in user under OBO (the same identity
+  the audit trigger uses). Use it when each person may see only *their own* rows.
+- **The group / role** the individual belongs to — use it when everyone in a team, tenant, or
+  clearance level shares the *same* subset. Either give each group its own contained database
+  user and key on `USER_NAME()` (or `DATABASE_PRINCIPAL_ID()`), or put users in a database role
+  and test `IS_ROLEMEMBER('<role>')`.
+
+One caveat for the grant the demo ships in `permissions.sql`: it maps *all* app users to a
+single Entra-group database user, so `USER_NAME()` is the same value for everyone — under that
+grant only `SUSER_SNAME()` tells individuals apart. Group-scoped rules need a separate contained
+user per group, or database roles.
 
 ```sql
--- A row is visible only to the user who owns it. For team / tenant / classification
--- rules, replace the predicate body with a join to a user↔scope mapping table.
+-- Per-individual example: a row is visible only to the user who owns it. For a group /
+-- tenant / classification rule, key on the group instead (USER_NAME(), or
+-- IS_ROLEMEMBER('...')), or join a user↔scope mapping table.
 CREATE FUNCTION dbo.fn_rowaccess(@OwnerUpn NVARCHAR(256))
     RETURNS TABLE
     WITH SCHEMABINDING
@@ -238,17 +247,16 @@ CREATE SECURITY POLICY dbo.CaseRecord_Access
 GO
 ```
 
-- **What `OwnerUpn` stores:** whatever `SUSER_SNAME()` returns for your users — often a form
-  like `live.com#user@example.com`, not the raw UPN. Populate it with `DEFAULT SUSER_SNAME()`
-  or a trigger, and list it in `DB_AUDIT_COLUMNS` so a client can't spoof it.
-- **Read vs write:** a `FILTER` predicate hides rows on read; add a `BLOCK` predicate to also
-  stop a user writing a row into a state they couldn't own.
-- **Applies to everyone**, including `db_owner` — RLS isn't bypassed by privileged users. (The
-  reflection managed identity reads only metadata, never data rows, so it is unaffected.)
-- **Performance:** the predicate runs on every query against the table — index the columns it
-  filters on.
+- **`OwnerUpn` holds whatever `SUSER_SNAME()` returns** for your users, not the raw UPN.
+  Set it with `DEFAULT SUSER_SNAME()` or a trigger and list it in `DB_AUDIT_COLUMNS`,
+  so a client can't set it to someone else.
+- **`FILTER` hides rows on read; `BLOCK`** additionally stops a user writing a row they
+  couldn't own.
+- **A filter predicate is not bypassed by `db_owner`** or other privileged users. (The
+  reflection identity only reads metadata, never data rows, so it is unaffected.)
+- **Index the columns the predicate filters on** — it runs on every query against the table.
 
-Apply this only to tables that genuinely need row-scoped access; most tables don't.
+Add this only to tables that genuinely need per-row access; most don't.
 
 ---
 
