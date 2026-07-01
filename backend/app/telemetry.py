@@ -60,6 +60,18 @@ def telemetry_enabled() -> bool:
     return bool(os.getenv(_CONNECTION_STRING_ENV))
 
 
+def connection_string() -> str | None:
+    """
+    The configured App Insights connection string, or None when telemetry is off.
+
+    Exposed to the browser via GET /config so the frontend SDK can initialise
+    against the same App Insights resource — client-side telemetry then shares an
+    OperationId with the server spans. None makes the frontend a clean no-op
+    (local dev, or any deployment without Application Insights).
+    """
+    return os.getenv(_CONNECTION_STRING_ENV) or None
+
+
 def _sampling_ratio() -> float:
     """
     Fraction of request traces to keep, from APPINSIGHTS_SAMPLING_RATIO (0.0–1.0,

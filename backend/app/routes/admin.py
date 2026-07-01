@@ -1,7 +1,7 @@
 """
 routes/admin.py — Operational endpoints.
 
-Three endpoints:
+Four endpoints:
 
   GET  /health          Readiness check. Returns 200 only if the application
                         is running, the schema snapshot is loaded, and the
@@ -14,6 +14,11 @@ Three endpoints:
                         Served from process constants, no snapshot or database
                         needed. The frontend's About dialog reads it.
 
+  GET  /config          Runtime configuration the browser needs — currently the
+                        Application Insights connection string (or null), so the
+                        frontend telemetry SDK can initialise against the same
+                        resource. No snapshot or database needed.
+
   POST /admin/refresh   Re-reflect the database schema and rebuild all
                         Pydantic models without restarting the process.
                         Useful after DDL changes (new tables, columns,
@@ -23,7 +28,9 @@ Three endpoints:
 Authentication is handled at the infrastructure level by EasyAuth. All
 endpoints are therefore accessible to any authenticated user. This is
 intentional for /health (monitoring tools need it), acceptable for /version
-(it exposes only the build id), and acceptable for /admin/refresh (a schema
+(it exposes only the build id) and /config (the App Insights key is designed to
+be client-embedded; serving it only to signed-in users is if anything tighter
+than baking it into public JS), and acceptable for /admin/refresh (a schema
 re-reflection is read-only and harmless to trigger unnecessarily).
 """
 
@@ -36,7 +43,7 @@ import time
 from fastapi import APIRouter, Depends
 from sqlalchemy import text
 
-from app import build_info
+from app import build_info, telemetry
 from app.connection import reflection_engine
 from app.errors import ApiError, ErrorCode
 from app.reflection import reflect_schemas
@@ -189,6 +196,20 @@ def version() -> dict:
     of "dev" mean the app is running outside a CI-built image (local uvicorn).
     """
     return build_info.as_dict()
+
+
+@router.get("/config")
+def config() -> dict:
+    """
+    Runtime configuration the browser needs to bootstrap.
+
+    Currently just the Application Insights connection string (or null when
+    telemetry isn't configured — local dev, or a deployment without App Insights),
+    so the frontend SDK initialises against the same resource and its telemetry
+    correlates with the server's. Served from process state — no snapshot or
+    database — so it answers even during startup.
+    """
+    return {"applicationInsights": {"connectionString": telemetry.connection_string()}}
 
 
 @router.post("/admin/refresh")

@@ -89,6 +89,14 @@ export interface SchemaList {
   schemas: string[]
 }
 
+/** GET /config — runtime settings the browser bootstraps from (admin.py). */
+export interface AppConfig {
+  applicationInsights: {
+    /** App Insights connection string, or null when telemetry isn't configured. */
+    connectionString: string | null
+  }
+}
+
 /** GET /version — the running backend build (app/build_info.py). */
 export interface BuildInfo {
   /** Commit SHA the image was built from; "dev" outside a CI-built image. */
