@@ -43,11 +43,14 @@ def test_expired_token_is_401_before_db_work(snapshot_only):
     assert resp.json()["code"] == "UNAUTHENTICATED"
 
 
-def test_wrong_primary_key_arity_is_400(widget):
-    # Widget has a single-column PK; supplying two values is a malformed request.
+def test_single_column_pk_takes_the_value_whole(widget):
+    # A single-column PK is never split on commas (so a natural key like "A,B"
+    # addresses correctly — see QA-3 / _pk_filter). Widget's PK is an int, so
+    # "1,2" is simply a value matching no row → 404, not a synthetic "arity" 400.
+    # (Composite-PK arity is validated in tests/unit/test_query_safety.py.)
     resp = widget.client.get("/api/dbo/Widget/1,2")
-    assert resp.status_code == 400
-    assert resp.json()["code"] == "BAD_REQUEST"
+    assert resp.status_code == 404
+    assert resp.json()["code"] == "NOT_FOUND"
 
 
 def test_error_response_shape(widget):
