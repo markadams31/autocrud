@@ -13,9 +13,10 @@ README is the design guide above them, because of one architectural fact:
 > and granted**, not of the app. Model the database for it and the app follows for free.
 
 It's written to be usable by a data modeller designing a schema for this app. Part 1 
-is the reflection contract (what the app reacts to). Part 2 maps common records
-and audit obligations to schema features. Part 3 is a copy-pasteable pattern. Part 4 
-is a checklist. Part 5 is an honest list of what the app does *not* do.
+is the reflection contract (what the app reacts to). Part 2 maps common records and audit
+obligations to schema features. Part 3 is a copy-pasteable audit/retire pattern. Part 4
+covers row-level need-to-know (RLS). Part 5 is a checklist. Part 6 is an honest list of
+what the app does *not* do.
 
 ### A note on proportionality
 
@@ -84,7 +85,8 @@ Two things you'll rely on:
 | **Trustworthy audit trail** | Who changed what, when, with before/after — tamper-evident | **System-versioned temporal** table (portable; history is unwritable while versioning is on) — or **ledger** tables for cryptographic proof — plus an actor trigger |
 | **Attribution** | Every change tied to a real person | `AFTER INSERT, UPDATE` trigger writing `SUSER_SNAME()` into audit columns (named in `DB_AUDIT_COLUMNS`) |
 | **No accidental/ad-hoc destruction** | Records amended, not deleted, by ordinary users | **Withhold the `DELETE` grant**; retire records with an editable status flag (a normal, audited `UPDATE`) instead |
-| **Least-privilege access** | Only the right people read/write | SQL grants per schema/table — the app enforces none of its own |
+| **Least-privilege access** | Only the right people read/write a table | SQL grants per schema/table — the app enforces none of its own |
+| **Need-to-know (row-scoped)** | Users see only *some* rows (their own, their team's, their level) | **Row-Level Security** — a security policy whose predicate keys on `SUSER_SNAME()` (see Part 4) |
 
 Note that a *trustworthy audit trail* and *no ad-hoc destruction* are two separate controls:
 temporal/ledger gives you the audit (and preserves deleted-row content in history);
@@ -203,7 +205,54 @@ do.
 
 ---
 
-## Part 4 — Checklist (for the tables that hold records)
+## Part 4 — Row-level need-to-know (RLS, optional)
+
+Sometimes a user may see only *some* rows of a table — their own records, their team's, or
+rows at or below their classification. SQL Server **Row-Level Security (RLS)** enforces that in
+the database, and — like the patterns above — it is **transparent to the app**: every query
+the app runs as the signed-in user (the grid, pagination, FK dropdowns, CSV export, even
+"all-matching" bulk operations) automatically returns, and counts, only the permitted rows.
+Nothing in the application changes.
+
+**The one thing that matters here:** the predicate must key on **`SUSER_SNAME()`** — the
+individual signed-in user — **not `USER_NAME()`**. App users authenticate individually (OBO)
+but map to a *shared* Entra-group database user, so `USER_NAME()` is the same group for
+everyone (useless for per-user filtering), while `SUSER_SNAME()` is the individual — the same
+identity the audit trigger uses. (Verified against a live database: with the policy on a user
+sees only their own rows, with it off all rows — and it applies even to `db_owner`.)
+
+```sql
+-- A row is visible only to the user who owns it. For team / tenant / classification
+-- rules, replace the predicate body with a join to a user↔scope mapping table.
+CREATE FUNCTION dbo.fn_rowaccess(@OwnerUpn NVARCHAR(256))
+    RETURNS TABLE
+    WITH SCHEMABINDING
+AS
+    RETURN SELECT 1 AS ok WHERE @OwnerUpn = SUSER_SNAME();
+GO
+
+CREATE SECURITY POLICY dbo.CaseRecord_Access
+    ADD FILTER PREDICATE dbo.fn_rowaccess(OwnerUpn) ON dbo.CaseRecord
+    -- ADD BLOCK PREDICATE dbo.fn_rowaccess(OwnerUpn) AFTER INSERT ON dbo.CaseRecord
+    WITH (STATE = ON);
+GO
+```
+
+- **What `OwnerUpn` stores:** whatever `SUSER_SNAME()` returns for your users — often a form
+  like `live.com#user@example.com`, not the raw UPN. Populate it with `DEFAULT SUSER_SNAME()`
+  or a trigger, and list it in `DB_AUDIT_COLUMNS` so a client can't spoof it.
+- **Read vs write:** a `FILTER` predicate hides rows on read; add a `BLOCK` predicate to also
+  stop a user writing a row into a state they couldn't own.
+- **Applies to everyone**, including `db_owner` — RLS isn't bypassed by privileged users. (The
+  reflection managed identity reads only metadata, never data rows, so it is unaffected.)
+- **Performance:** the predicate runs on every query against the table — index the columns it
+  filters on.
+
+Apply this only to tables that genuinely need row-scoped access; most tables don't.
+
+---
+
+## Part 5 — Checklist (for the tables that hold records)
 
 - [ ] **Primary key** present (or the app skips the table).
 - [ ] **System-versioned temporal** (or updatable ledger) for immutable who/what/when/before-after.
@@ -213,12 +262,14 @@ do.
       withheld** from app users.
 - [ ] `ROWVERSION` for optimistic concurrency (recommended).
 - [ ] A descriptive **display column** (`Title`/`Name`/…) for readable labels and FK dropdowns.
+- [ ] **Row-Level Security** *(only if users may see a subset of rows)* — a `SECURITY POLICY`
+      whose predicate keys on `SUSER_SNAME()`; see Part 4.
 
 Reference/lookup and transitory tables need none of this — leave them plain.
 
 ---
 
-## Part 5 — What the app does *not* do (read this)
+## Part 6 — What the app does *not* do (read this)
 
 These patterns are carried by the **database**. The application is deliberately unchanged, so
 it does **not**:
