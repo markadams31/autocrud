@@ -64,12 +64,20 @@ export function AppShell() {
 
   return (
     <div className="flex h-screen w-full overflow-hidden bg-background text-foreground">
+      {/* Skip link — the first focusable element, so keyboard and screen-reader
+          users can jump past the sidebar navigation straight to the content. */}
+      <a
+        href="#main-content"
+        className="sr-only rounded-md bg-background px-4 py-2 text-sm font-medium shadow-lg ring-2 ring-ring focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-50"
+      >
+        Skip to main content
+      </a>
       <Sidebar
         selection={{ schema: url.schema, table: url.table }}
         onSelect={(s) => url.selectTable(s.schema!, s.table!)}
         onPrefetch={prefetchTable}
       />
-      <main className="min-w-0 flex-1 overflow-hidden bg-muted/20">
+      <main id="main-content" tabIndex={-1} className="min-w-0 flex-1 overflow-hidden bg-muted/20 outline-none">
         {url.schema && url.table ? (
           <TableView
             key={`${url.schema}.${url.table}`}

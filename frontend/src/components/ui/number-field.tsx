@@ -31,6 +31,8 @@ interface NumberFieldProps {
   autoFocus?: boolean
   placeholder?: string
   className?: string
+  /** id of an element describing the field (e.g. an inline error message). */
+  describedBy?: string
 }
 
 function NumberField({
@@ -46,6 +48,7 @@ function NumberField({
   autoFocus,
   placeholder,
   className,
+  describedBy,
 }: NumberFieldProps) {
   return (
     <NumberFieldPrimitive.Root
@@ -73,6 +76,7 @@ function NumberField({
           autoFocus={autoFocus}
           placeholder={placeholder}
           aria-invalid={invalid}
+          aria-describedby={describedBy}
           className="h-full min-w-0 flex-1 bg-transparent px-2.5 text-center text-base tabular-nums outline-none placeholder:text-muted-foreground md:text-sm"
         />
         <NumberFieldPrimitive.Increment

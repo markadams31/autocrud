@@ -36,6 +36,8 @@ export interface FieldControlProps {
   invalid?: boolean
   autoFocus?: boolean
   id?: string
+  /** id of an element (e.g. an inline error message) describing this field. */
+  describedBy?: string
 }
 
 // Long-text heuristic: NVARCHAR(MAX) reflects with no length; anything beyond a
@@ -76,6 +78,7 @@ function ForeignKeySelect({
   invalid,
   autoFocus,
   id,
+  describedBy,
 }: FieldControlProps) {
   const { data, isLoading } = useOptions(schema, table, column.name)
 
@@ -102,6 +105,7 @@ function ForeignKeySelect({
           id={id}
           autoFocus={autoFocus}
           aria-invalid={invalid}
+          aria-describedby={describedBy}
           placeholder={isLoading ? 'Loading…' : 'Search…'}
         />
         <ComboboxActions>
@@ -124,7 +128,7 @@ function ForeignKeySelect({
 }
 
 export function FieldControl(props: FieldControlProps) {
-  const { column, value, onChange, invalid, autoFocus, id } = props
+  const { column, value, onChange, invalid, autoFocus, id, describedBy } = props
 
   if (column.foreign_key) {
     return <ForeignKeySelect {...props} />
@@ -135,6 +139,7 @@ export function FieldControl(props: FieldControlProps) {
       return (
         <Switch
           id={id}
+          aria-describedby={describedBy}
           checked={value === true}
           onCheckedChange={(checked) => onChange(checked)}
         />
@@ -147,6 +152,7 @@ export function FieldControl(props: FieldControlProps) {
           type="date"
           autoFocus={autoFocus}
           aria-invalid={invalid}
+          aria-describedby={describedBy}
           value={toDateInput(value)}
           onChange={(e) => onChange(e.target.value || null)}
         />
@@ -159,6 +165,7 @@ export function FieldControl(props: FieldControlProps) {
           type="datetime-local"
           autoFocus={autoFocus}
           aria-invalid={invalid}
+          aria-describedby={describedBy}
           value={toDateTimeLocal(value)}
           onChange={(e) => onChange(e.target.value || null)}
         />
@@ -172,6 +179,7 @@ export function FieldControl(props: FieldControlProps) {
           step={1}
           autoFocus={autoFocus}
           aria-invalid={invalid}
+          aria-describedby={describedBy}
           value={toTimeInput(value)}
           onChange={(e) => onChange(e.target.value || null)}
         />
@@ -185,6 +193,7 @@ export function FieldControl(props: FieldControlProps) {
           format={INTEGER_FORMAT}
           autoFocus={autoFocus}
           invalid={invalid}
+          describedBy={describedBy}
           value={toNumber(value)}
           // Keep form state as strings (like every other control) so the
           // form's change-detection and conversion stay uniform.
@@ -200,6 +209,7 @@ export function FieldControl(props: FieldControlProps) {
           format={FLOAT_FORMAT}
           autoFocus={autoFocus}
           invalid={invalid}
+          describedBy={describedBy}
           value={toNumber(value)}
           onValueChange={(n) => onChange(n == null ? null : String(n))}
         />
@@ -214,6 +224,7 @@ export function FieldControl(props: FieldControlProps) {
           inputMode="decimal"
           autoFocus={autoFocus}
           aria-invalid={invalid}
+          aria-describedby={describedBy}
           value={value == null ? '' : String(value)}
           onChange={(e) => onChange(e.target.value === '' ? null : e.target.value)}
         />
@@ -230,6 +241,7 @@ export function FieldControl(props: FieldControlProps) {
             className="field-sizing-content max-h-64"
             autoFocus={autoFocus}
             aria-invalid={invalid}
+            aria-describedby={describedBy}
             maxLength={column.max_length ?? undefined}
             value={value == null ? '' : String(value)}
             onChange={(e) => onChange(e.target.value === '' ? null : e.target.value)}
@@ -242,6 +254,7 @@ export function FieldControl(props: FieldControlProps) {
           type="text"
           autoFocus={autoFocus}
           aria-invalid={invalid}
+          aria-describedby={describedBy}
           maxLength={column.max_length ?? undefined}
           value={value == null ? '' : String(value)}
           onChange={(e) => onChange(e.target.value === '' ? null : e.target.value)}
