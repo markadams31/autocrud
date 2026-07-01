@@ -209,7 +209,7 @@ export function HeaderCell({
             )}
           />
         </HoverCardTrigger>
-        <HoverCardContent side="bottom" align="start">
+        <HoverCardContent side="bottom" align="start" className="w-fit min-w-36 max-w-xs p-3">
           <ColumnMetaCard column={column} />
         </HoverCardContent>
       </HoverCard>
@@ -232,13 +232,13 @@ const FIELD_TYPE_ICON: Record<FieldType, LucideIcon> = {
 
 /**
  * The header hover-card body: the column's metadata as ONE consistent
- * label/value grid. Every card shares the same skeleton — a typed headline,
- * then aligned rows in a fixed order (Type → Nullable → Key → References →
- * Managed by) — so the same fact sits in the same place on every column and
- * the eye never has to re-scan. Rows that don't apply are omitted, never
- * reordered; there are no wrapping pills or right-ragged values. Richness comes
- * from the type icon and monospace chips for code-like values, not extra
- * formats. Reads entirely from the already-fetched ColumnMeta — no request.
+ * label/value grid. Every card shares the same skeleton — a typed headline, a
+ * full-bleed divider, then aligned rows in a fixed order (Type → Nullable → Key
+ * → References → Managed by) — so the same fact sits in the same place on every
+ * column. Rows that don't apply are omitted, never reordered. The card hugs its
+ * content (width adapts; capped so long values wrap). Richness is typographic —
+ * a per-type icon and monospace for code-like values, not extra formats. Reads
+ * entirely from the already-fetched ColumnMeta — no request.
  */
 function ColumnMetaCard({ column }: { column: ColumnMeta }) {
   const readOnly = !column.editable
@@ -246,27 +246,32 @@ function ColumnMetaCard({ column }: { column: ColumnMeta }) {
   const TypeIco = FIELD_TYPE_ICON[column.field_type]
   // Drop the COLLATE clause str(col.type) appends — noise that blew out the card.
   const displayType = (column.sql_type ?? column.field_type).replace(/\s+COLLATE\b.*/i, '')
-  // Fold "required on create" into the nullability line so a NOT NULL column
-  // with a default (not required) isn't conflated with one that is.
-  const nullable = column.nullable ? 'Yes' : column.required ? 'No · required' : 'No'
   return (
-    <div className="space-y-3">
+    <div className="space-y-2.5">
       <div className="flex items-center gap-2">
-        <TypeIco className="size-4 shrink-0 text-muted-foreground" />
-        <p className="font-heading truncate text-sm font-semibold">{column.name}</p>
+        <TypeIco className="size-3.5 shrink-0 text-muted-foreground" />
+        <p className="font-heading min-w-0 truncate text-sm font-semibold">{column.name}</p>
       </div>
-      <div className="h-px bg-border/60" />
-      <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-xs">
+      <div className="-mx-3 h-px bg-border" />
+      <dl className="grid grid-cols-[auto_auto] gap-x-6 gap-y-1.5 text-xs">
         <MetaRow label="Type">
-          <Mono>{displayType}</Mono>
+          <span className="font-mono">{displayType}</span>
         </MetaRow>
-        <MetaRow label="Nullable">{nullable}</MetaRow>
+        <MetaRow label="Nullable">
+          {column.nullable ? (
+            'Yes'
+          ) : (
+            <>
+              No{column.required && <span className="text-muted-foreground"> · required</span>}
+            </>
+          )}
+        </MetaRow>
         {(column.is_primary_key || fk) && (
           <MetaRow label="Key">{column.is_primary_key ? 'Primary key' : 'Foreign key'}</MetaRow>
         )}
         {fk && (
           <MetaRow label="References">
-            <Mono>{`${fk.schema}.${fk.table}.${fk.column}`}</Mono>
+            <span className="font-mono break-all">{`${fk.schema}.${fk.table}.${fk.column}`}</span>
           </MetaRow>
         )}
         {readOnly && (
@@ -286,14 +291,5 @@ function MetaRow({ label, children }: { label: string; children: ReactNode }) {
       <dt className="text-muted-foreground">{label}</dt>
       <dd className="min-w-0 font-medium break-words">{children}</dd>
     </>
-  )
-}
-
-/** Monospace chip for code-like values (SQL types, FK targets). */
-function Mono({ children }: { children: ReactNode }) {
-  return (
-    <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] break-all">
-      {children}
-    </code>
   )
 }
