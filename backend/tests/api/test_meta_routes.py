@@ -29,6 +29,9 @@ def test_describe_table(widget):
     cols = {c["name"]: c for c in body["columns"]}
     assert cols["WidgetID"]["is_primary_key"] is True
     assert cols["Name"]["required"] is True
+    # Precise SQL type is exposed for the header hover-card. The exact string
+    # varies by backend, so just assert it's present and non-empty.
+    assert isinstance(cols["WidgetID"]["sql_type"], str) and cols["WidgetID"]["sql_type"]
     # Audit columns are classified DB-owned by name (works on any backend).
     assert cols["CreatedBy"]["is_audit"] is True
     assert cols["CreatedBy"]["editable"] is False

@@ -47,6 +47,7 @@ beforeAll(() => {
 const col = (name: string, overrides: Partial<ColumnMeta> = {}): ColumnMeta => ({
   name,
   field_type: 'text',
+  sql_type: 'nvarchar(100)',
   nullable: true,
   required: false,
   editable: true,

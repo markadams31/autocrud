@@ -105,6 +105,7 @@ def _column_response(col: ColumnInfo) -> dict:
     return {
         "name":         col.name,
         "field_type":   _field_type(col),
+        "sql_type":     col.sql_type,
         "nullable":     col.nullable,
         "required":     col.required_on_create,
         "editable":     col.is_editable,
