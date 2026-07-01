@@ -13,6 +13,7 @@ import { ErrorBoundary as ReactErrorBoundary, type FallbackProps } from 'react-e
 import { RotateCwIcon, TriangleAlertIcon } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
+import { trackException } from '@/lib/telemetry'
 
 function AppErrorFallback(_props: FallbackProps) {
   return (
@@ -36,9 +37,13 @@ function AppErrorFallback(_props: FallbackProps) {
 }
 
 function logError(error: unknown, info: ErrorInfo) {
-  // Surfaced to the console (and any console-attached telemetry). A real
-  // deployment would forward this to an error reporter here.
+  // Surfaced to the console for local dev, and reported to App Insights as a
+  // handled exception (a no-op when telemetry isn't configured — see telemetry.ts)
+  // with the React component stack for pinpointing where the render crashed.
   console.error('Unhandled UI error:', error, info.componentStack)
+  trackException(error instanceof Error ? error : new Error(String(error)), {
+    componentStack: info.componentStack ?? '',
+  })
 }
 
 export function ErrorBoundary({ children }: { children: ReactNode }) {

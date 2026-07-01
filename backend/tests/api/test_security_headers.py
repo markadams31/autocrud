@@ -82,6 +82,15 @@ def test_build_csp_pins_inline_scripts_by_hash(tmp_path):
     assert "script-src 'self' " in csp
 
 
+def test_build_csp_allows_app_insights_ingestion_in_connect_src():
+    # The browser telemetry SDK POSTs to the regional App Insights ingestion
+    # endpoint; default-src 'self' would block it without this allowance.
+    csp = build_csp(None)
+    connect_src = csp.split("connect-src")[1].split(";")[0]
+    assert "'self'" in connect_src
+    assert "https://*.in.applicationinsights.azure.com" in connect_src
+
+
 def test_build_csp_without_a_frontend_has_no_script_hashes():
     csp = build_csp(None)
     assert "sha256-" not in csp

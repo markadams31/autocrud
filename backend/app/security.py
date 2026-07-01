@@ -92,7 +92,12 @@ def build_csp(frontend_dist: str | None) -> str:
         "img-src 'self' data:",
         "font-src 'self' data:",
         "style-src 'self' 'unsafe-inline'",
-        "connect-src 'self'",
+        # 'self' for the API; the App Insights ingestion endpoint (regional
+        # *.in.applicationinsights.azure.com) for the browser telemetry SDK, which
+        # would otherwise be blocked by default-src 'self'. The frontend only
+        # sends when a connection string is configured (GET /config), but allowing
+        # this fixed Azure domain is harmless when telemetry is off.
+        "connect-src 'self' https://*.in.applicationinsights.azure.com",
         "script-src " + " ".join(script_src),
     ]
     return "; ".join(directives)

@@ -66,6 +66,7 @@ import {
 } from '@/hooks/use-url-state'
 import { api } from '@/lib/api'
 import { isConstraintViolation, messageFor } from '@/lib/errors'
+import { trackEvent } from '@/lib/telemetry'
 import type {
   BulkDeleteRequest,
   BulkUpdateRequest,
@@ -330,7 +331,16 @@ export function TableView({ schema, table, url }: TableViewProps) {
       { row, values: { [column.name]: value } },
       {
         onSuccess: () => flashRow(row),
-        onError: (err) => toast.error(messageFor(err, 'Could not save the change.')),
+        onError: (err) => {
+          toast.error(messageFor(err, 'Could not save the change.'))
+          // The optimistic cell update just rolled back — record it so
+          // cache-reconciliation failures are visible in telemetry.
+          trackEvent('optimistic_rollback', {
+            op: 'cell_edit',
+            table,
+            code: isConstraintViolation(err) ? 'constraint' : 'other',
+          })
+        },
       },
     )
   }

@@ -22,6 +22,7 @@ import { toast } from 'sonner'
 import { invalidateTableWrites, queryKeys } from '@/hooks/queries'
 import { api, encodePk } from '@/lib/api'
 import { isConflict, isConstraintViolation, messageFor } from '@/lib/errors'
+import { trackEvent } from '@/lib/telemetry'
 import type { QueryResponse, Row } from '@/types'
 
 /**
@@ -86,6 +87,7 @@ function beginUndoableDelete(
   // while the delete is only pending (it hasn't hit the server and could fail),
   // resolving in place to "Deleted." on success or the error if it's rejected.
   let undone = false
+  let committing = false
   let remaining = UNDO_WINDOW_SECONDS
   let interval = 0
   let toastId: string | number = ''
@@ -98,6 +100,11 @@ function beginUndoableDelete(
     window.clearInterval(interval)
     restore()
     toast.dismiss(toastId) // an Infinity-duration toast won't close itself
+    // `raced` = the undo landed *after* the real delete was already dispatched
+    // (the toast stays clickable during the in-flight commit), so the restore is
+    // only local while the server delete still commits. Telemetry surfaces how
+    // often that race actually bites.
+    trackEvent('row_delete_undo', { schema, table, raced: committing })
   }
 
   // Re-supplied on every toast update so the Undo button survives the countdown.
@@ -106,10 +113,12 @@ function beginUndoableDelete(
   toastId = toast(title(remaining), { duration: Infinity, action })
 
   const commit = async () => {
+    committing = true
     try {
       const successMessage = await opts.commit()
       invalidateTableWrites(qc, schema, table) // refresh rows + FK dropdowns
       toast.success(successMessage, { id: toastId, duration: 2500 })
+      trackEvent('row_delete_committed', { schema, table })
     } catch (err) {
       restore()
       // Reconcile with the server after a failed delete: the row is back, but a
@@ -120,6 +129,10 @@ function beginUndoableDelete(
       // original options, so without this the error would inherit
       // duration:Infinity and never fade (and couldn't be dismissed).
       toast.error(opts.errorMessage(err), { id: toastId, duration: 6000 })
+      // The optimistic removal was just rolled back — record it (and the coarse
+      // reason) so cache-reconciliation failures are visible in telemetry.
+      const code = isConflict(err) ? 'conflict' : isConstraintViolation(err) ? 'constraint' : 'other'
+      trackEvent('row_delete_failed', { schema, table, code })
     }
   }
 

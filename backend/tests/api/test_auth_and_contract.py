@@ -79,6 +79,16 @@ def test_health_503_when_database_unreachable(widget):
     assert resp.json()["code"] == "DATABASE_UNAVAILABLE"
 
 
+def test_config_returns_app_insights_connection_string(snapshot_only):
+    # /config feeds the frontend telemetry SDK. No snapshot/DB needed. In tests
+    # no connection string is configured, so it's null — the frontend then no-ops.
+    resp = snapshot_only.client.get("/config")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "applicationInsights" in body
+    assert body["applicationInsights"]["connectionString"] is None
+
+
 def test_malformed_request_body_is_422_validation_error(widget):
     # A non-int page fails FastAPI's own request-model validation, which the
     # RequestValidationError handler turns into the standard VALIDATION_ERROR

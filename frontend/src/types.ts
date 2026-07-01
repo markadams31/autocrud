@@ -89,6 +89,14 @@ export interface SchemaList {
   schemas: string[]
 }
 
+/** GET /config — runtime settings the browser bootstraps from (admin.py). */
+export interface AppConfig {
+  applicationInsights: {
+    /** App Insights connection string, or null when telemetry isn't configured. */
+    connectionString: string | null
+  }
+}
+
 /** A FK dropdown option, from meta.py::get_options. */
 export interface FieldOption {
   value: string | number
