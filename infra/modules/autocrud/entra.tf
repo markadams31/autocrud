@@ -98,17 +98,6 @@ resource "azuread_application_federated_identity_credential" "easyauth_mi" {
   subject        = azurerm_user_assigned_identity.easyauth.principal_id
 }
 
-# Client secret — SUPERSEDED by the federated identity credential above.
-# auth_settings_v2 now authenticates with the managed identity; this secret is
-# kept dormant for one release as an instant rollback and is slated for removal
-# in a follow-up once the MI login is confirmed on dev. The far-future end_date
-# is left untouched so this dying secret isn't needlessly rotated on its way out.
-resource "azuread_application_password" "easyauth" {
-  application_id = azuread_application.main.id
-  display_name   = "easyauth-${var.environment}"
-  end_date       = "2099-01-01T00:00:00Z"
-}
-
 # ---------------------------------------------------------------------------
 # Security group
 #
