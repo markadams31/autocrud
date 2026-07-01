@@ -154,6 +154,22 @@ describe('formatValue — datetime (stored UTC, shown local)', () => {
     expect(formatValue('2024-01-01T10:00:00', c)).not.toBe(naiveLocal)
   })
 
+  it('pins a year-9999 max-date sentinel to UTC so it does not overflow to year 10000', () => {
+    const c = col('ValidTo', 'datetime')
+    // Under a positive local offset a naive shift would render "Jan 1, 10000";
+    // year-9999 sentinels are pinned to UTC and stay "Dec 31, 9999".
+    const expected = new Date('9999-12-31T23:59:59.999999Z').toLocaleString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZone: 'UTC',
+    })
+    expect(formatValue('9999-12-31T23:59:59.999999', c)).toBe(expected)
+    expect(formatValue('9999-12-31T23:59:59.999999', c)).not.toContain('10000')
+  })
+
   it('does not double-shift a value that already carries a zone', () => {
     const c = col('CreatedAt', 'datetime')
     const expected = new Date('2024-01-01T10:00:00Z').toLocaleString(undefined, {

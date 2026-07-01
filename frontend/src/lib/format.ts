@@ -67,13 +67,18 @@ function formatDate(value: unknown, type: FieldType): string {
   // datetime — stored as UTC, shown in the viewer's local time.
   const d = parseAsUtc(raw)
   if (Number.isNaN(d.getTime())) return raw
-  return d.toLocaleString(undefined, {
+  const opts: Intl.DateTimeFormatOptions = {
     year: 'numeric',
     month: 'short',
     day: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
-  })
+  }
+  // A max-date sentinel (year 9999 — a common "no end date") would spill past the
+  // calendar into "year 10000" when shifted to a positive local offset. Render it
+  // in UTC so it stays put instead of rendering a nonsensical date.
+  if (d.getUTCFullYear() >= 9999) opts.timeZone = 'UTC'
+  return d.toLocaleString(undefined, opts)
 }
 
 /**
