@@ -68,7 +68,7 @@ output "deploy_command" {
 
 # ---------------------------------------------------------------------------
 # Local .env values for this environment. Copy these into a .env at the repo
-# root. DB_DRIVER is a constant (not resource-derived) — see .env.example.
+# root — see .env.example. (No driver setting: mssql-python bundles its own.)
 # ---------------------------------------------------------------------------
 
 output "env_db_server" {

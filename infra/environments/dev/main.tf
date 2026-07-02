@@ -66,7 +66,7 @@ output "app_service_url" { value = module.autocrud.app_service_url }
 output "app_users_group_name" { value = module.autocrud.app_users_group_name }
 output "sql_admins_group_name" { value = module.autocrud.sql_admins_group_name }
 
-# Values for a local .env at the repo root. DB_DRIVER is a constant — see .env.example.
+# Values for a local .env at the repo root — see .env.example.
 output "env_db_server" { value = module.autocrud.env_db_server }
 output "env_db_database" { value = module.autocrud.env_db_database }
 output "env_db_schemas" { value = module.autocrud.env_db_schemas }

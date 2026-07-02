@@ -4,10 +4,10 @@ the things only a real database exercises: SELECT SCOPE_IDENTITY() inserts on
 trigger-carrying tables (implicit RETURNING disabled), computed columns, value-
 generating defaults, and audit triggers stamping the real caller.
 
-Uses dbo.Gadget (fetch-safe types) for row round-trips and dbo.Project for the
-foreign-key paths. dbo.AllTypes is reflection-only. The types pyodbc can't fetch
-via SELECT * (hierarchyid, sql_variant, geometry/geography) get their own read
-round-trip in test_crud_clr_types.py, which proves the read-path CAST.
+Uses dbo.Gadget (plain types) for row round-trips and dbo.Project for the
+foreign-key paths. dbo.AllTypes is reflection-only. The CLR/sql_variant columns
+that read back as CAST text (ColumnInfo.read_as_text) get their own read
+round-trip in test_crud_clr_types.py.
 
 Docker-gated (see integration/conftest.py).
 """

@@ -16,9 +16,10 @@ export function messageFor(err: unknown, fallback: string): string {
 }
 
 /**
- * True when the error is the API's generic constraint violation. The backend
- * never names tables/keys, so callers phrase their own context-specific copy
- * (e.g. "still referenced by other records") off this.
+ * True when the error is a database constraint violation. The message on it is
+ * the database's own error text (internal tool — see backend errors.py), so it
+ * names the constraint/table involved; callers may show it directly or phrase
+ * their own context-specific copy off this check.
  */
 export function isConstraintViolation(err: unknown): boolean {
   return err instanceof ApiError && err.code === 'CONSTRAINT_VIOLATION'

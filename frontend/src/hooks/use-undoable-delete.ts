@@ -33,17 +33,16 @@ import type { QueryResponse, Row } from '@/types'
 const UNDO_WINDOW_SECONDS = 5
 
 /**
- * A human delete-failure message. The API keeps CONSTRAINT_VIOLATION generic
- * (it never names tables/keys), but a failed delete is almost always blocked by
- * a foreign key — another row still points at this one — so we say that.
+ * A human delete-failure message. A CONSTRAINT_VIOLATION message is the
+ * database's own error text (internal tool — see backend errors.py), which for
+ * a blocked delete names the REFERENCE constraint and referencing table:
+ * exactly the precise reason to surface, with a generic fallback.
  */
 function deleteErrorMessage(err: unknown, what: string): string {
   if (isConflict(err)) {
     return `Didn't delete ${what} — it was changed by someone else since you loaded it. The latest version has been restored.`
   }
   if (isConstraintViolation(err)) {
-    // The backend now names which table still references this row; surface that
-    // precise reason, falling back to a generic sentence if it didn't.
     return messageFor(err, `Can't delete ${what} because other records still reference it.`)
   }
   return messageFor(err, `Could not delete ${what}.`)

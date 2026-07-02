@@ -46,6 +46,16 @@ export interface ColumnMeta {
   is_primary_key: boolean
   /** Named in DB_AUDIT_COLUMNS — populated by the database, shown muted. */
   is_audit: boolean
+  /**
+   * Column-level capabilities decided at reflection time. Optional so
+   * lightweight test fixtures can omit them; treat absence as capable.
+   */
+  /** Free-text search (LIKE) is valid against this column. */
+  searchable?: boolean
+  /** Value filters (=, range, in, contains…) are valid against this column. */
+  filterable?: boolean
+  /** MS_Description authored in the database, or null — render as help text. */
+  description?: string | null
   max_length: number | null
   precision: number | null
   scale: number | null
