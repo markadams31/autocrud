@@ -11,10 +11,12 @@ requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.49.0",
-    # 2.1.0b2 added the mssql+mssqlpython dialect; pinned to the beta until 2.1
-    # final ships. Reflection behaviour verified identical to 2.0 against SQL
-    # Server 2025 (the golden snapshot passes unchanged).
-    "sqlalchemy==2.1.0b3",
+    # Pinned to the 2.1 line: 2.1.0b2 added the mssql+mssqlpython dialect this
+    # app runs on. The explicit pre-release floor lets the resolver use the
+    # beta now and pick up 2.1 final automatically when it ships; the golden
+    # reflection snapshot (tests/integration) arbitrates any behaviour drift
+    # on that upgrade. Verified against SQL Server 2025.
+    "sqlalchemy>=2.1.0b3,<2.2",
     # Microsoft's first-party driver, replacing pyodbc: natively fetches the CLR
     # types (hierarchyid/geometry/geography) and sql_variant that pyodbc raises
     # -151/-16 on, and bundles its own driver — no msodbcsql18/unixODBC install

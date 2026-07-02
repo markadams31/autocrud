@@ -210,13 +210,11 @@ BEGIN
 END;
 GO
 
--- ── Fetch-safe table for CRUD round-trips ────────────────────────────────────
--- AllTypes intentionally contains types pyodbc cannot fetch back via SELECT *
--- (hierarchyid, sql_variant), which is fine for metadata reflection but not for
--- row round-trips. Gadget mirrors the interesting write-path behaviour —
--- identity via SCOPE_IDENTITY on a trigger table, a computed column, a
--- value-generating default, a plain default, and audit columns — using only
--- fetch-safe types.
+-- ── Plain-typed table for CRUD round-trips ───────────────────────────────────
+-- AllTypes exists for reflection breadth; Gadget mirrors the interesting
+-- write-path behaviour — identity via SCOPE_IDENTITY on a trigger table, a
+-- computed column, a value-generating default, a plain default, and audit
+-- columns — using only plain types, so round-trip assertions stay simple.
 CREATE TABLE dbo.Gadget (
     GadgetID     INT             IDENTITY(1,1) NOT NULL CONSTRAINT PK_Gadget PRIMARY KEY,
     Name         NVARCHAR(100)   NOT NULL,                                  -- required
@@ -256,13 +254,12 @@ CREATE TABLE dbo.Concurrent (
 GO
 
 -- ── CLR / spatial / sql_variant read round-trip ──────────────────────────────
--- The pyodbc driver cannot materialise a CLR UDT (hierarchyid/geometry/geography,
--- ODBC type -151) or sql_variant (-16) in a result row: a plain SELECT of one
--- fails the whole read. Reflection flags them ColumnInfo.fetchable=False and the
--- read path CASTs them to NVARCHAR (routes/crud._read_columns), so a row is
--- readable — value returned as text (WKT for spatial, path for hierarchyid). A
--- seeded row exercises that end to end. Doc (json) is a genuinely editable column
--- alongside them.
+-- The driver returns raw CLR-internal bytes for hierarchyid/geometry/geography,
+-- and sql_variant has no fixed JSON shape. Reflection flags them
+-- ColumnInfo.read_as_text and the read path CASTs them to NVARCHAR
+-- (routes/crud._read_columns), so the API returns text — WKT for spatial, the
+-- path for hierarchyid, the value for sql_variant. A seeded row exercises that
+-- end to end. Doc (json) is a genuinely editable column alongside them.
 CREATE TABLE dbo.Spatial (
     SpatialID INT           IDENTITY(1,1) NOT NULL CONSTRAINT PK_Spatial PRIMARY KEY,
     Name      NVARCHAR(100) NOT NULL,

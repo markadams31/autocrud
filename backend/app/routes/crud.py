@@ -68,7 +68,7 @@ from app.auth_headers import CLIENT_PRINCIPAL_NAME
 from app.config import BULK_MAX_ROWS
 from app.dependencies import get_db, get_table
 from app.errors import ApiError, ErrorCode, map_database_exception
-from app.reflection import ColumnKind, TableInfo
+from app.reflection import ColumnInfo, ColumnKind, TableInfo
 
 logger = logging.getLogger(__name__)
 
@@ -190,22 +190,16 @@ def _execute(db: Connection, stmt):
     Execute a statement, translating database exceptions into the API's error
     contract. ApiError passes through untouched (it's already in the contract);
     everything else goes through map_database_exception, so a denied grant
-    surfaces as PERMISSION_DENIED rather than a raw 500.
-
-    The original database error is logged before it's mapped away — the client
-    only gets a generic, safe message (e.g. CONSTRAINT_VIOLATION), so the precise
-    cause (which constraint/table) lives only here. `e.orig` is the raw DBAPI
-    error, which names the constraint/table but not the row's values. Correlate
-    it with a request via the X-Request-ID in the log line.
+    surfaces as PERMISSION_DENIED rather than a raw 500. The database's own
+    message travels to the client verbatim (internal tool; see errors.py) and
+    is logged here too, correlated via the X-Request-ID on the log line.
     """
     try:
         return db.execute(stmt)
     except ApiError:
         raise
     except Exception as e:
-        # Pass the statement's table so a unique/FK violation can name the exact
-        # column the user edited (the raw message only names the referenced side).
-        mapped = map_database_exception(e, getattr(stmt, "table", None))
+        mapped = map_database_exception(e)
         level = logging.ERROR if mapped.status_code >= 500 else logging.WARNING
         logger.log(level, "Database error → %s: %s", mapped.code.value, getattr(e, "orig", e))
         raise mapped
@@ -264,40 +258,19 @@ def _escape_like(term: str) -> str:
     )
 
 
-def _require_comparable(sa_col) -> None:
+def _require_filterable(info: ColumnInfo) -> None:
     """
-    Reject a value filter on a column the database can't compare or LIKE —
-    varbinary/rowversion (bytes) and other opaque types (xml). Offering a text
-    operator such as "contains" on these produced a driver error (or a bare 500)
-    that the grid then silently swallowed; fail clean with a 400 instead. Null
-    checks (isnull/notnull) don't compare a value, so they skip this.
+    Reject a value filter on a column reflection marked non-comparable —
+    binary/rowversion, xml, and the opaque CLR/vector/json types. Offering an
+    operator on those reaches the server only to fail; this is a clean 400
+    without a round-trip. Null checks (isnull/notnull) don't compare a value,
+    so they skip this.
     """
-    try:
-        pytype = sa_col.type.python_type
-    except (NotImplementedError, AttributeError):
-        pytype = None
-    if pytype is None or pytype is bytes:
+    if not info.filterable:
         raise ApiError(
             ErrorCode.BAD_REQUEST,
             "Filtering is not supported for this column type.",
         )
-
-
-def _is_likeable_column(sa_col) -> bool:
-    """
-    True for a genuine string column a LIKE can safely run against. A column's
-    is_text flag comes from the reflected python_type, which tags varbinary/
-    rowversion (bytes) and xml as "text" too — but a string LIKE against those
-    column *types* errors (binary raises 'string argument without an encoding';
-    xml → SQL error 8116). Free-text search re-checks the actual column type here
-    and searches only real string columns.
-    """
-    try:
-        if sa_col.type.python_type is not str:
-            return False
-    except (NotImplementedError, AttributeError):
-        return False
-    return "XML" not in type(sa_col.type).__name__.upper()
 
 
 def _in_clause(sa_col, values: list):
@@ -315,7 +288,7 @@ def _in_clause(sa_col, values: list):
     return sa_col.in_(values)
 
 
-def _filter_clause(sa_col, raw):
+def _filter_clause(info: ColumnInfo, sa_col, raw):
     """
     Build a WHERE clause for one column filter, or return None to skip it.
 
@@ -338,7 +311,7 @@ def _filter_clause(sa_col, raw):
     """
     # Shorthand: bare scalar (equality) or list (IN) — both compare by value.
     if not isinstance(raw, dict):
-        _require_comparable(sa_col)
+        _require_filterable(info)
         if isinstance(raw, list):
             return _in_clause(sa_col, raw) if raw else sa_col.in_([None])
         return sa_col == raw
@@ -351,10 +324,8 @@ def _filter_clause(sa_col, raw):
     if op == "notnull":
         return sa_col.is_not(None)
 
-    # Every remaining operator compares against the column's value (LIKE too),
-    # which varbinary/xml can't do — reject before building a clause the driver
-    # would only fail on.
-    _require_comparable(sa_col)
+    # Every remaining operator compares against the column's value (LIKE too).
+    _require_filterable(info)
 
     if op == "between":
         if not isinstance(val, (list, tuple)) or len(val) != 2:
@@ -381,25 +352,20 @@ def _filter_clause(sa_col, raw):
 
 def _search_clause(table: TableInfo, search: str):
     """
-    Build a LIKE-across-all-text-columns clause for a free-text search, or None
-    if there's nothing to search (empty term, or no text columns).
+    Build a LIKE-across-all-searchable-columns clause for a free-text search,
+    or None if there's nothing to search (empty term, or no string columns).
+    Searchability is decided at reflection time (ColumnInfo.searchable): real
+    string types only, since LIKE against xml/json/binary raises server-side.
     """
     term = search.strip()
     if not term:
         return None
     t = table.sa_table
-    # is_text is set from the reflected python_type, which tags binary/rowversion
-    # and xml as "text" — but a LIKE against those column types errors. Re-check
-    # the actual column type and search only genuine string columns.
-    likeable = [
-        t.c[col.name]
-        for col in table.columns
-        if col.is_text and _is_likeable_column(t.c[col.name])
-    ]
-    if not likeable:
+    searchable = [t.c[col.name] for col in table.columns if col.searchable]
+    if not searchable:
         return None
     escaped = _escape_like(term)
-    return or_(*[c.like(f"%{escaped}%", escape="\\") for c in likeable])
+    return or_(*[c.like(f"%{escaped}%", escape="\\") for c in searchable])
 
 
 def _query_where(table: TableInfo, search: str, filters: dict[str, Any]) -> list:
@@ -418,9 +384,10 @@ def _query_where(table: TableInfo, search: str, filters: dict[str, Any]) -> list
 
     t = table.sa_table
     for col_name, raw in filters.items():
-        if col_name not in t.c:
+        info = table.column(col_name)
+        if info is None or col_name not in t.c:
             continue
-        clause = _filter_clause(t.c[col_name], raw)
+        clause = _filter_clause(info, t.c[col_name], raw)
         if clause is not None:
             clauses.append(clause)
     return clauses
@@ -586,18 +553,16 @@ def _read_columns(table: TableInfo) -> list:
     """
     The column expressions to SELECT for a full-row read.
 
-    Most columns are selected as-is. A column the pyodbc driver cannot materialise
-    in a result row — a SQL Server CLR UDT (hierarchyid/geometry/geography, ODBC
-    type -151) or sql_variant (-16), flagged ColumnInfo.fetchable=False at
-    reflection — is CAST to NVARCHAR(MAX) and re-labelled with its own name. A
-    plain SELECT of such a column raises "ODBC SQL type -151/-16 is not yet
-    supported" and fails the whole read (and, via the post-write re-fetch, blocks
-    create/update too); the CAST returns the value as text instead — WKT for
-    spatial types, the path string for hierarchyid — so the row is readable.
+    Most columns are selected as-is. Columns flagged ColumnInfo.read_as_text at
+    reflection — the CLR UDTs (hierarchyid/geometry/geography), whose raw
+    driver value is CLR-internal bytes, and sql_variant, which has no fixed
+    JSON shape — are CAST to NVARCHAR and re-labelled with their own name, so
+    the API returns human-usable text: WKT for spatial types, the path string
+    for hierarchyid, the value as text for sql_variant.
     """
     t = table.sa_table
     return [
-        t.c[c.name] if c.fetchable else cast(t.c[c.name], NVARCHAR()).label(c.name)
+        cast(t.c[c.name], NVARCHAR()).label(c.name) if c.read_as_text else t.c[c.name]
         for c in table.columns
     ]
 
@@ -1117,7 +1082,7 @@ def bulk_create_rows(
         except ApiError:
             raise
         except Exception as e:
-            mapped = map_database_exception(e, t)
+            mapped = map_database_exception(e)
             raise ApiError(mapped.code, f"Row {i + 1}: {mapped.message}", row=i)
 
     created = len(payloads)

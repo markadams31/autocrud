@@ -10,7 +10,7 @@ resolved TableInfo imports from here. Keeping these in one place means:
 
 The three dependencies
 ----------------------
-get_snapshot    Read-only access to the current ReflectedSchema. Used by
+get_snapshot    Read-only access to the current SchemaSnapshot. Used by
                 every meta and CRUD route. Returns the snapshot that was
                 current when the request arrived; if a refresh happens mid-
                 request the route simply finishes against the older snapshot.
@@ -28,7 +28,7 @@ get_table       Resolves a (schema, table) pair from URL path parameters
 Usage in a route
 ----------------
     from app.dependencies import get_snapshot, get_db, get_table
-    from app.reflection import TableInfo, ReflectedSchema
+    from app.reflection import TableInfo, SchemaSnapshot
     from sqlalchemy.engine import Connection
 
     @router.get("/{schema}/{table}")
@@ -50,7 +50,7 @@ from fastapi import Depends, Path
 
 from app.connection import get_user_db as get_db
 from app.errors import ApiError, ErrorCode
-from app.reflection import ReflectedSchema, TableInfo
+from app.reflection import SchemaSnapshot, TableInfo
 from app.state import get_snapshot as _get_snapshot_raw
 
 
@@ -58,12 +58,12 @@ from app.state import get_snapshot as _get_snapshot_raw
 # Snapshot dependency
 # ---------------------------------------------------------------------------
 
-def get_snapshot() -> ReflectedSchema:
+def get_snapshot() -> SchemaSnapshot:
     """
     Return the current schema snapshot.
 
     FastAPI calls this as a dependency; it is synchronous and cheap (just
-    reads a module-level reference). Routes receive the ReflectedSchema
+    reads a module-level reference). Routes receive the SchemaSnapshot
     that was current when their request began.
     """
     return _get_snapshot_raw()
@@ -76,7 +76,7 @@ def get_snapshot() -> ReflectedSchema:
 def get_table(
     schema: str = Path(..., description="Schema name, e.g. 'dbo'"),
     table:  str = Path(..., description="Table name"),
-    snapshot: ReflectedSchema = Depends(get_snapshot),
+    snapshot: SchemaSnapshot = Depends(get_snapshot),
 ) -> TableInfo:
     """
     Resolve URL path parameters {schema} and {table} into a TableInfo.

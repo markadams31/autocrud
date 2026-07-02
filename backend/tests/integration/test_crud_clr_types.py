@@ -1,12 +1,11 @@
 """
 Read path for CLR / spatial / sql_variant columns + SQL Server 2025 json.
 
-pyodbc cannot materialise a CLR UDT (hierarchyid/geometry/geography → ODBC type
--151) or sql_variant (-16) in a result row, so a plain SELECT * of a table that
-holds one fails the whole read — and, via the post-write re-fetch, blocks create
-too. Reflection flags those columns unfetchable and the read path CASTs them to
+The driver returns raw CLR-internal bytes for hierarchyid/geometry/geography —
+useless through a JSON API — and sql_variant has no fixed JSON shape. Reflection
+flags those columns ColumnInfo.read_as_text and the read path CASTs them to
 NVARCHAR (routes/crud._read_columns). These tests prove a row round-trips through
-the real driver as text instead of raising.
+the real driver as human-usable text (WKT / path / value).
 
 Docker-gated (see integration/conftest.py).
 """

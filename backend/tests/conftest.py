@@ -29,7 +29,7 @@ from sqlalchemy.pool import StaticPool
 from app import reflection
 from app.main import app
 from app.dependencies import get_db, get_snapshot
-from app.reflection import ReflectedSchema, TableInfo
+from app.reflection import CatalogFacts, ColumnFacts, SchemaSnapshot, TableInfo
 from app.routes.admin import database_is_reachable
 
 
@@ -40,21 +40,35 @@ from app.routes.admin import database_is_reachable
 def make_table_info(
     table: Table,
     schema: str = "dbo",
-    generated_always: set | None = None,
-    fk_map: dict | None = None,
+    facts: CatalogFacts | None = None,
 ) -> TableInfo:
     """
     Build a real TableInfo from a SQLAlchemy Table using the production
     reflection internals — so the create/update models, display column, and
     column classification under test are the exact ones the app would build.
+
+    `facts` carries the per-column catalog facts a live reflection would have
+    gathered (computed/default/FK flags), keyed (schema, table, column) with
+    schema None for these schemaless harness tables. `schema` keys the
+    snapshot even though the table itself carries schema=None, so statements
+    stay unqualified and run against sqlite.
     """
-    return reflection._build_table_info(
-        schema, table, generated_always or set(), fk_map or {}
-    )
+    return reflection._build_table_info(table, facts or CatalogFacts(), schema=schema)
 
 
-def make_snapshot(*table_infos: TableInfo) -> ReflectedSchema:
-    return ReflectedSchema(tables={ti.key: ti for ti in table_infos})
+def make_snapshot(*table_infos: TableInfo) -> SchemaSnapshot:
+    return SchemaSnapshot(tables={ti.key: ti for ti in table_infos})
+
+
+def pk_default_facts(table: Table) -> CatalogFacts:
+    """
+    Facts marking a hand-built table's single-column PK as carrying a database
+    default — the harness equivalent of "the database supplies this value"
+    (sqlite autoincrements it), so it is omitted from the Create model exactly
+    like a reflected identity/defaulted PK.
+    """
+    (pk,) = table.primary_key.columns
+    return CatalogFacts({(None, table.name, pk.name): ColumnFacts(has_default=True)})
 
 
 # ---------------------------------------------------------------------------
@@ -101,7 +115,7 @@ def widget():
     )
     md.create_all(engine)
 
-    table_info = make_table_info(table, schema="dbo")
+    table_info = make_table_info(table, schema="dbo", facts=pk_default_facts(table))
     snapshot = make_snapshot(table_info)
 
     def _override_get_db():
@@ -183,7 +197,7 @@ def versioned():
         )
         seeded_pk = result.inserted_primary_key[0]
 
-    table_info = make_table_info(table, schema="dbo")
+    table_info = make_table_info(table, schema="dbo", facts=pk_default_facts(table))
     snapshot = make_snapshot(table_info)
 
     def _override_get_db():

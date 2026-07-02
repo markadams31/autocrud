@@ -92,10 +92,11 @@ resource "azurerm_linux_web_app" "main" {
   app_settings = {
     # Mirrors the env vars the app reads (see backend/app/config.py, main.py,
     # middleware.py, telemetry.py).
-    DB_SERVER        = azurerm_mssql_server.main.fully_qualified_domain_name
-    DB_DATABASE      = local.mssql_database_name
-    DB_SCHEMAS       = join(",", var.db_schemas)
-    DB_DRIVER        = "ODBC Driver 18 for SQL Server"
+    DB_SERVER   = azurerm_mssql_server.main.fully_qualified_domain_name
+    DB_DATABASE = local.mssql_database_name
+    DB_SCHEMAS  = join(",", var.db_schemas)
+    # No DB_DRIVER: mssql-python bundles its own SQL Server driver, so there is
+    # no ODBC driver name to configure (the app ignores a leftover setting).
     DB_AUDIT_COLUMNS = join(",", var.db_audit_columns)
     BULK_MAX_ROWS    = tostring(var.bulk_max_rows)
     LOG_LEVEL        = var.log_level

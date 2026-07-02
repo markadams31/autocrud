@@ -46,7 +46,7 @@ from sqlalchemy.engine import Connection
 from app import config
 from app.dependencies import get_db, get_snapshot, get_table
 from app.errors import ApiError, ErrorCode, map_database_exception
-from app.reflection import ColumnInfo, ReflectedSchema, TableInfo
+from app.reflection import ColumnInfo, SchemaSnapshot, TableInfo
 
 logger = logging.getLogger(__name__)
 
@@ -67,9 +67,6 @@ _FIELD_TYPE: dict[Any, str] = {
     float:    "number",
     Decimal:  "decimal",    # Surfaces as string in JSON; frontend treats as text input
     bool:     "boolean",
-    "date":   "date",
-    "datetime": "datetime",
-    "time":   "time",
 }
 
 def _field_type(col: ColumnInfo) -> str:
@@ -101,7 +98,7 @@ def _column_response(col: ColumnInfo) -> dict:
     Every field name is chosen for clarity to a frontend developer reading
     the API response — no abbreviations, no internal jargon.
     """
-    fk = col.foreign_key  # (schema, table, column) or None
+    fk = col.foreign_key
     return {
         "name":         col.name,
         "field_type":   _field_type(col),
@@ -111,13 +108,20 @@ def _column_response(col: ColumnInfo) -> dict:
         "editable":     col.is_editable,
         "is_primary_key":  col.is_primary_key,
         "is_audit":        col.is_audit,
+        # Column-level capabilities, decided at reflection time, so the grid
+        # can offer search/filter controls only where the server accepts them.
+        "searchable":      col.searchable,
+        "filterable":      col.filterable,
+        # MS_Description extended property — a human description authored in
+        # the database, or null. Render as help text next to the field.
+        "description":     col.comment,
         "max_length":      col.max_length,
         "precision":       col.precision,
         "scale":           col.scale,
         "foreign_key": {
-            "schema": fk[0],
-            "table":  fk[1],
-            "column": fk[2],
+            "schema": fk.schema,
+            "table":  fk.table,
+            "column": fk.column,
         } if fk else None,
     }
 
@@ -128,7 +132,7 @@ def _column_response(col: ColumnInfo) -> dict:
 
 @router.get("")
 def list_schemas(
-    snapshot: ReflectedSchema = Depends(get_snapshot),
+    snapshot: SchemaSnapshot = Depends(get_snapshot),
 ) -> dict:
     """
     List the configured schemas that have at least one reflected table.
@@ -153,7 +157,7 @@ def list_schemas(
 @router.get("/{schema}")
 def list_tables(
     schema: str,
-    snapshot: ReflectedSchema = Depends(get_snapshot),
+    snapshot: SchemaSnapshot = Depends(get_snapshot),
     db:       Connection      = Depends(get_db),
 ) -> dict:
     """
@@ -295,7 +299,7 @@ _OPTIONS_LIMIT = 1000
 def get_options(
     column:   str,
     table:    TableInfo      = Depends(get_table),
-    snapshot: ReflectedSchema = Depends(get_snapshot),
+    snapshot: SchemaSnapshot = Depends(get_snapshot),
     db:       Connection      = Depends(get_db),
 ) -> list:
     """

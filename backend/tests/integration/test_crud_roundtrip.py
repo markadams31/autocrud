@@ -4,10 +4,10 @@ the things only a real database exercises: SELECT SCOPE_IDENTITY() inserts on
 trigger-carrying tables (implicit RETURNING disabled), computed columns, value-
 generating defaults, and audit triggers stamping the real caller.
 
-Uses dbo.Gadget (fetch-safe types) for row round-trips and dbo.Project for the
-foreign-key paths. dbo.AllTypes is reflection-only. The types pyodbc can't fetch
-via SELECT * (hierarchyid, sql_variant, geometry/geography) get their own read
-round-trip in test_crud_clr_types.py, which proves the read-path CAST.
+Uses dbo.Gadget (plain types) for row round-trips and dbo.Project for the
+foreign-key paths. dbo.AllTypes is reflection-only. The CLR/sql_variant columns
+that read back as CAST text (ColumnInfo.read_as_text) get their own read
+round-trip in test_crud_clr_types.py.
 
 Docker-gated (see integration/conftest.py).
 """
@@ -109,19 +109,17 @@ def test_invalid_foreign_key_is_constraint_violation(api):
     assert resp.json()["code"] == "CONSTRAINT_VIOLATION"
 
 
-def test_check_violation_quotes_the_rule(api):
-    # The mssql dialect doesn't reflect CHECK constraints, so reflection reads them
-    # from sys.check_constraints and the error quotes the *rule*, not just its name.
+def test_check_violation_passes_sql_servers_message_through(api):
+    # Database errors reach the client verbatim (internal tool; see errors.py):
+    # SQL Server's own CHECK-violation message names the constraint, table and
+    # column — precise feedback with no parsing layer to drift out of date.
     # Only a real database enforces the CHECK, so this can only run here.
     resp = api.post("/api/dbo/Checked", json={"Name": "over", "Score": 999})
     assert resp.status_code == 409, resp.text
     body = resp.json()
     assert body["code"] == "CONSTRAINT_VIOLATION"
-    # The message quotes the reflected rule and points at the column, rather than
-    # echoing the raw constraint name CK_Checked_Score.
-    assert "satisfy" in body["message"].lower()
-    assert "Score" in body["message"]
-    assert "CK_Checked_Score" not in body["message"]
+    assert "CK_Checked_Score" in body["message"]     # SQL Server names the rule
+    assert "CHECK" in body["message"]
 
 
 def test_options_returns_value_label_pairs_for_fk(api):

@@ -270,7 +270,10 @@ def refresh_schema() -> dict:
     logger.info("Schema refreshed: %d table(s) across %d schema(s)", total, len(by_schema))
 
     return {
-        "status":  "ok",
-        "total":   total,
-        "schemas": by_schema,
+        "status":       "ok",
+        "total":        total,
+        "schemas":      by_schema,
+        # When this snapshot was taken (UTC) — lets an operator confirm the
+        # refresh actually replaced the snapshot and see its age later.
+        "reflected_at": snapshot.reflected_at.isoformat(),
     }

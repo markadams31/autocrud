@@ -226,15 +226,14 @@ top of the summary in the order you run them — they're complete and ready to
 copy-paste into bash from the root directory.
 
 The `env_*` outputs are the values for a local `.env`. Assemble one at the repo
-root (run from this environment directory — `DB_DRIVER` is a constant, so it comes
-from [`.env.example`](../../../.env.example)):
+root (run from this environment directory; no driver setting — mssql-python
+bundles its own SQL Server driver):
 
 ```powershell
 @"
 DB_SERVER=$(terraform output -raw env_db_server)
 DB_DATABASE=$(terraform output -raw env_db_database)
 DB_SCHEMAS=$(terraform output -raw env_db_schemas)
-DB_DRIVER=ODBC Driver 18 for SQL Server
 DB_AUDIT_COLUMNS=$(terraform output -raw env_db_audit_columns)
 LOG_LEVEL=$(terraform output -raw env_log_level)
 "@ | Set-Content ../../../.env

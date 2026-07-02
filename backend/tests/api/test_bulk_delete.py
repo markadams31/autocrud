@@ -15,9 +15,10 @@ from sqlalchemy.dialects.mssql import INTEGER, NVARCHAR
 from sqlalchemy.pool import StaticPool
 
 from app import reflection
+from tests.conftest import pk_default_facts
 from app.dependencies import get_db, get_snapshot
 from app.main import app
-from app.reflection import ReflectedSchema
+from app.reflection import SchemaSnapshot
 
 
 def _create(client, **fields):
@@ -186,8 +187,8 @@ def related():
             md.tables["Employee"].insert(), [{"EmployeeID": 1, "DepartmentID": 1}]
         )
 
-    dept_info = reflection._build_table_info("dbo", dept, set(), {})
-    snapshot = ReflectedSchema(tables={dept_info.key: dept_info})
+    dept_info = reflection._build_table_info(dept, pk_default_facts(dept), schema="dbo")
+    snapshot = SchemaSnapshot(tables={dept_info.key: dept_info})
 
     def _override_get_db():
         conn = engine.connect()

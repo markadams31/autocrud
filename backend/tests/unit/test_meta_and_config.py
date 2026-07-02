@@ -9,7 +9,7 @@ from sqlalchemy.dialects.mssql import DATETIME2, DECIMAL, INTEGER, NVARCHAR
 
 from app import config
 from app.config import _build_settings
-from app.reflection import _build_column_info
+from app.reflection import CatalogFacts, ColumnFacts, ForeignKeyRef, _build_column_info
 from app.routes.meta import _column_response, _field_type
 
 
@@ -20,14 +20,18 @@ def _project_columns():
     t = Table(
         "Project", md,
         Column("ProjectID", INTEGER(), Identity(), primary_key=True),
-        Column("ProjectName", NVARCHAR(200), nullable=False),
+        Column("ProjectName", NVARCHAR(200), nullable=False, comment="Working title"),
         Column("Budget", DECIMAL(18, 2), nullable=False),
         Column("ManagerID", INTEGER(), nullable=False),
         Column("CreatedDate", DATETIME2(), nullable=True),
         schema="ppm",
     )
-    fk_map = {("ppm", "Project", "ManagerID"): ("dbo", "Employee", "EmployeeID")}
-    return {c.name: _build_column_info(c, set(), fk_map) for c in t.columns}
+    facts = CatalogFacts({
+        ("ppm", "Project", "ManagerID"): ColumnFacts(
+            foreign_key=ForeignKeyRef("dbo", "Employee", "EmployeeID")
+        ),
+    })
+    return {c.name: _build_column_info(c, facts.for_column(c), 1) for c in t.columns}
 
 
 def test_field_type_strings():
@@ -66,6 +70,16 @@ def test_column_response_audit_column():
 
 def test_column_response_max_length():
     assert _column_response(_project_columns()["ProjectName"])["max_length"] == 200
+
+
+def test_column_response_capabilities_and_description():
+    cols = _project_columns()
+    name = _column_response(cols["ProjectName"])
+    assert name["searchable"] is True and name["filterable"] is True
+    assert name["description"] == "Working title"
+    budget = _column_response(cols["Budget"])
+    assert budget["searchable"] is False and budget["filterable"] is True
+    assert budget["description"] is None
 
 
 # ── Config parsing / fail-fast ───────────────────────────────────────────────

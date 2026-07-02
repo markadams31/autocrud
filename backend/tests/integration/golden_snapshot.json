@@ -2,7 +2,8 @@
   "app2.External": {
     "columns": [
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": true,
@@ -12,12 +13,15 @@
         "nullable": false,
         "precision": null,
         "python_type": "int",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "INTEGER"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -27,12 +31,15 @@
         "nullable": false,
         "precision": null,
         "python_type": "str",
+        "read_as_text": false,
         "required_on_create": true,
         "scale": null,
+        "searchable": true,
         "sql_type": "NVARCHAR(100) COLLATE \"SQL_Latin1_General_CP1_CI_AS\""
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": [
           "dbo",
           "Category",
@@ -46,8 +53,10 @@
         "nullable": false,
         "precision": null,
         "python_type": "int",
+        "read_as_text": false,
         "required_on_create": true,
         "scale": null,
+        "searchable": false,
         "sql_type": "INTEGER"
       }
     ],
@@ -68,7 +77,8 @@
   "dbo.AllTypes": {
     "columns": [
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": true,
@@ -78,12 +88,15 @@
         "nullable": false,
         "precision": null,
         "python_type": "int",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "INTEGER"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -93,12 +106,15 @@
         "nullable": true,
         "precision": null,
         "python_type": "int",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "BIGINT"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -108,12 +124,15 @@
         "nullable": true,
         "precision": null,
         "python_type": "int",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "INTEGER"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -123,12 +142,15 @@
         "nullable": true,
         "precision": null,
         "python_type": "int",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "SMALLINT"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -138,12 +160,15 @@
         "nullable": true,
         "precision": null,
         "python_type": "int",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "TINYINT"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -153,12 +178,15 @@
         "nullable": true,
         "precision": null,
         "python_type": "bool",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "BIT"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -168,12 +196,15 @@
         "nullable": true,
         "precision": 18,
         "python_type": "Decimal",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": 4,
+        "searchable": false,
         "sql_type": "DECIMAL(18, 4)"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -183,12 +214,15 @@
         "nullable": true,
         "precision": 10,
         "python_type": "Decimal",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": 2,
+        "searchable": false,
         "sql_type": "NUMERIC(10, 2)"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": false,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -198,12 +232,15 @@
         "nullable": true,
         "precision": null,
         "python_type": "Decimal",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "MONEY"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": false,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -213,12 +250,15 @@
         "nullable": true,
         "precision": null,
         "python_type": "Decimal",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "SMALLMONEY"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -228,12 +268,15 @@
         "nullable": true,
         "precision": 53,
         "python_type": "float",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "FLOAT"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -243,12 +286,15 @@
         "nullable": true,
         "precision": 24,
         "python_type": "float",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "REAL"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -258,12 +304,15 @@
         "nullable": true,
         "precision": null,
         "python_type": "date",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "DATE"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -273,12 +322,15 @@
         "nullable": true,
         "precision": null,
         "python_type": "time",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "TIME"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -288,12 +340,15 @@
         "nullable": true,
         "precision": null,
         "python_type": "datetime",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "DATETIME"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -303,12 +358,15 @@
         "nullable": true,
         "precision": null,
         "python_type": "datetime",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "DATETIME2"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -318,12 +376,15 @@
         "nullable": true,
         "precision": null,
         "python_type": "datetime",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "SMALLDATETIME"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -333,12 +394,15 @@
         "nullable": true,
         "precision": null,
         "python_type": "str",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "DATETIMEOFFSET"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -348,12 +412,15 @@
         "nullable": true,
         "precision": null,
         "python_type": "str",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": true,
         "sql_type": "NVARCHAR(100) COLLATE \"SQL_Latin1_General_CP1_CI_AS\""
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -363,12 +430,15 @@
         "nullable": true,
         "precision": null,
         "python_type": "str",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": true,
         "sql_type": "NVARCHAR COLLATE \"SQL_Latin1_General_CP1_CI_AS\""
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -378,12 +448,15 @@
         "nullable": true,
         "precision": null,
         "python_type": "str",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": true,
         "sql_type": "VARCHAR(50) COLLATE \"SQL_Latin1_General_CP1_CI_AS\""
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -393,12 +466,15 @@
         "nullable": true,
         "precision": null,
         "python_type": "str",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": true,
         "sql_type": "CHAR(10) COLLATE \"SQL_Latin1_General_CP1_CI_AS\""
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -408,12 +484,15 @@
         "nullable": true,
         "precision": null,
         "python_type": "str",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": true,
         "sql_type": "NCHAR(10) COLLATE \"SQL_Latin1_General_CP1_CI_AS\""
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -423,12 +502,15 @@
         "nullable": true,
         "precision": null,
         "python_type": "str",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "UNIQUEIDENTIFIER"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": false,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -438,12 +520,15 @@
         "nullable": true,
         "precision": null,
         "python_type": "str",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "VARBINARY(100)"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": false,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -453,12 +538,15 @@
         "nullable": true,
         "precision": null,
         "python_type": "str",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "VARBINARY"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": false,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -468,12 +556,15 @@
         "nullable": true,
         "precision": null,
         "python_type": "str",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "XML"
       },
       {
-        "fetchable": false,
+        "comment": null,
+        "filterable": false,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -482,13 +573,16 @@
         "name": "ColSqlVariant",
         "nullable": true,
         "precision": null,
-        "python_type": null,
+        "python_type": "str",
+        "read_as_text": true,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "SQL_VARIANT"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": false,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -498,12 +592,15 @@
         "nullable": false,
         "precision": null,
         "python_type": "str",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "TIMESTAMP"
       },
       {
-        "fetchable": false,
+        "comment": null,
+        "filterable": false,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -513,12 +610,15 @@
         "nullable": true,
         "precision": null,
         "python_type": "str",
+        "read_as_text": true,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "HIERARCHYID"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": false,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -528,12 +628,15 @@
         "nullable": true,
         "precision": null,
         "python_type": "str",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "JSON"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": false,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -543,12 +646,15 @@
         "nullable": true,
         "precision": null,
         "python_type": "str",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "VECTOR"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -558,12 +664,15 @@
         "nullable": true,
         "precision": null,
         "python_type": "int",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "INTEGER"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -573,12 +682,15 @@
         "nullable": true,
         "precision": null,
         "python_type": "int",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "BIGINT"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -588,12 +700,15 @@
         "nullable": false,
         "precision": null,
         "python_type": "datetime",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "DATETIME2"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -603,12 +718,15 @@
         "nullable": false,
         "precision": null,
         "python_type": "str",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "UNIQUEIDENTIFIER"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -618,12 +736,15 @@
         "nullable": false,
         "precision": null,
         "python_type": "int",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "INTEGER"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -633,12 +754,15 @@
         "nullable": false,
         "precision": null,
         "python_type": "str",
+        "read_as_text": false,
         "required_on_create": true,
         "scale": null,
+        "searchable": true,
         "sql_type": "NVARCHAR(50) COLLATE \"SQL_Latin1_General_CP1_CI_AS\""
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -648,12 +772,15 @@
         "nullable": true,
         "precision": null,
         "python_type": "str",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": true,
         "sql_type": "NVARCHAR(50) COLLATE \"SQL_Latin1_General_CP1_CI_AS\""
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": true,
         "is_primary_key": false,
@@ -663,12 +790,15 @@
         "nullable": true,
         "precision": null,
         "python_type": "str",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": true,
         "sql_type": "NVARCHAR(128) COLLATE \"SQL_Latin1_General_CP1_CI_AS\""
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": true,
         "is_primary_key": false,
@@ -678,12 +808,15 @@
         "nullable": true,
         "precision": null,
         "python_type": "datetime",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "DATETIME2"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": true,
         "is_primary_key": false,
@@ -693,12 +826,15 @@
         "nullable": true,
         "precision": null,
         "python_type": "str",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": true,
         "sql_type": "NVARCHAR(128) COLLATE \"SQL_Latin1_General_CP1_CI_AS\""
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": true,
         "is_primary_key": false,
@@ -708,8 +844,10 @@
         "nullable": true,
         "precision": null,
         "python_type": "datetime",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "DATETIME2"
       }
     ],
@@ -782,7 +920,8 @@
   "dbo.Category": {
     "columns": [
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": true,
@@ -792,12 +931,15 @@
         "nullable": false,
         "precision": null,
         "python_type": "int",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "INTEGER"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -807,12 +949,15 @@
         "nullable": false,
         "precision": null,
         "python_type": "str",
+        "read_as_text": false,
         "required_on_create": true,
         "scale": null,
+        "searchable": true,
         "sql_type": "NVARCHAR(10) COLLATE \"SQL_Latin1_General_CP1_CI_AS\""
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -822,8 +967,10 @@
         "nullable": false,
         "precision": null,
         "python_type": "str",
+        "read_as_text": false,
         "required_on_create": true,
         "scale": null,
+        "searchable": true,
         "sql_type": "NVARCHAR(100) COLLATE \"SQL_Latin1_General_CP1_CI_AS\""
       }
     ],
@@ -844,7 +991,8 @@
   "dbo.Checked": {
     "columns": [
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": true,
@@ -854,12 +1002,15 @@
         "nullable": false,
         "precision": null,
         "python_type": "int",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "INTEGER"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -869,12 +1020,15 @@
         "nullable": false,
         "precision": null,
         "python_type": "str",
+        "read_as_text": false,
         "required_on_create": true,
         "scale": null,
+        "searchable": true,
         "sql_type": "NVARCHAR(100) COLLATE \"SQL_Latin1_General_CP1_CI_AS\""
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -884,8 +1038,10 @@
         "nullable": false,
         "precision": null,
         "python_type": "int",
+        "read_as_text": false,
         "required_on_create": true,
         "scale": null,
+        "searchable": false,
         "sql_type": "INTEGER"
       }
     ],
@@ -906,7 +1062,8 @@
   "dbo.Composite": {
     "columns": [
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": true,
@@ -916,12 +1073,15 @@
         "nullable": false,
         "precision": null,
         "python_type": "int",
+        "read_as_text": false,
         "required_on_create": true,
         "scale": null,
+        "searchable": false,
         "sql_type": "INTEGER"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": true,
@@ -931,12 +1091,15 @@
         "nullable": false,
         "precision": null,
         "python_type": "int",
+        "read_as_text": false,
         "required_on_create": true,
         "scale": null,
+        "searchable": false,
         "sql_type": "INTEGER"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -946,8 +1109,10 @@
         "nullable": true,
         "precision": null,
         "python_type": "str",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": true,
         "sql_type": "NVARCHAR(100) COLLATE \"SQL_Latin1_General_CP1_CI_AS\""
       }
     ],
@@ -969,7 +1134,8 @@
   "dbo.Concurrent": {
     "columns": [
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": true,
@@ -979,12 +1145,15 @@
         "nullable": false,
         "precision": null,
         "python_type": "int",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "INTEGER"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -994,12 +1163,15 @@
         "nullable": false,
         "precision": null,
         "python_type": "str",
+        "read_as_text": false,
         "required_on_create": true,
         "scale": null,
+        "searchable": true,
         "sql_type": "NVARCHAR(100) COLLATE \"SQL_Latin1_General_CP1_CI_AS\""
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": false,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -1009,8 +1181,10 @@
         "nullable": false,
         "precision": null,
         "python_type": "str",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "TIMESTAMP"
       }
     ],
@@ -1029,7 +1203,8 @@
   "dbo.EdgeRef": {
     "columns": [
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": true,
@@ -1039,12 +1214,15 @@
         "nullable": false,
         "precision": null,
         "python_type": "int",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "INTEGER"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": [
           "outside",
           "Target",
@@ -1058,12 +1236,15 @@
         "nullable": false,
         "precision": null,
         "python_type": "int",
+        "read_as_text": false,
         "required_on_create": true,
         "scale": null,
+        "searchable": false,
         "sql_type": "INTEGER"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -1073,8 +1254,10 @@
         "nullable": true,
         "precision": null,
         "python_type": "str",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": true,
         "sql_type": "NVARCHAR(50) COLLATE \"SQL_Latin1_General_CP1_CI_AS\""
       }
     ],
@@ -1095,7 +1278,8 @@
   "dbo.Employee": {
     "columns": [
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": true,
@@ -1105,12 +1289,15 @@
         "nullable": false,
         "precision": null,
         "python_type": "int",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "INTEGER"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -1120,8 +1307,10 @@
         "nullable": false,
         "precision": null,
         "python_type": "str",
+        "read_as_text": false,
         "required_on_create": true,
         "scale": null,
+        "searchable": true,
         "sql_type": "NVARCHAR(100) COLLATE \"SQL_Latin1_General_CP1_CI_AS\""
       }
     ],
@@ -1140,7 +1329,8 @@
   "dbo.Gadget": {
     "columns": [
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": true,
@@ -1150,12 +1340,15 @@
         "nullable": false,
         "precision": null,
         "python_type": "int",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "INTEGER"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -1165,12 +1358,15 @@
         "nullable": false,
         "precision": null,
         "python_type": "str",
+        "read_as_text": false,
         "required_on_create": true,
         "scale": null,
+        "searchable": true,
         "sql_type": "NVARCHAR(100) COLLATE \"SQL_Latin1_General_CP1_CI_AS\""
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -1180,12 +1376,15 @@
         "nullable": true,
         "precision": null,
         "python_type": "int",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "INTEGER"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -1195,12 +1394,15 @@
         "nullable": true,
         "precision": null,
         "python_type": "int",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "INTEGER"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -1210,12 +1412,15 @@
         "nullable": false,
         "precision": null,
         "python_type": "str",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "UNIQUEIDENTIFIER"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -1225,12 +1430,15 @@
         "nullable": false,
         "precision": null,
         "python_type": "int",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "INTEGER"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": true,
         "is_primary_key": false,
@@ -1240,12 +1448,15 @@
         "nullable": true,
         "precision": null,
         "python_type": "str",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": true,
         "sql_type": "NVARCHAR(128) COLLATE \"SQL_Latin1_General_CP1_CI_AS\""
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": true,
         "is_primary_key": false,
@@ -1255,12 +1466,15 @@
         "nullable": true,
         "precision": null,
         "python_type": "datetime",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "DATETIME2"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": true,
         "is_primary_key": false,
@@ -1270,12 +1484,15 @@
         "nullable": true,
         "precision": null,
         "python_type": "str",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": true,
         "sql_type": "NVARCHAR(128) COLLATE \"SQL_Latin1_General_CP1_CI_AS\""
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": true,
         "is_primary_key": false,
@@ -1285,8 +1502,10 @@
         "nullable": true,
         "precision": null,
         "python_type": "datetime",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "DATETIME2"
       }
     ],
@@ -1309,7 +1528,8 @@
   "dbo.Legacy": {
     "columns": [
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": true,
@@ -1319,12 +1539,15 @@
         "nullable": false,
         "precision": null,
         "python_type": "int",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "INTEGER"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -1334,12 +1557,15 @@
         "nullable": true,
         "precision": null,
         "python_type": "str",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": true,
         "sql_type": "TEXT(16) COLLATE \"SQL_Latin1_General_CP1_CI_AS\""
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -1349,12 +1575,15 @@
         "nullable": true,
         "precision": null,
         "python_type": "str",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": true,
         "sql_type": "NTEXT"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -1364,12 +1593,15 @@
         "nullable": true,
         "precision": null,
         "python_type": "str",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": true,
         "sql_type": "VARCHAR(20) COLLATE \"SQL_Latin1_General_CP1_CI_AS\""
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -1379,12 +1611,15 @@
         "nullable": false,
         "precision": null,
         "python_type": "int",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "INTEGER"
       },
       {
-        "fetchable": true,
+        "comment": "Free-text label shown to operators",
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -1394,8 +1629,10 @@
         "nullable": false,
         "precision": null,
         "python_type": "str",
+        "read_as_text": false,
         "required_on_create": true,
         "scale": null,
+        "searchable": true,
         "sql_type": "NVARCHAR(50) COLLATE \"SQL_Latin1_General_CP1_CI_AS\""
       }
     ],
@@ -1422,7 +1659,8 @@
   "dbo.ManualIntKey": {
     "columns": [
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": true,
@@ -1432,12 +1670,15 @@
         "nullable": false,
         "precision": null,
         "python_type": "int",
+        "read_as_text": false,
         "required_on_create": true,
         "scale": null,
+        "searchable": false,
         "sql_type": "INTEGER"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -1447,8 +1688,10 @@
         "nullable": false,
         "precision": null,
         "python_type": "str",
+        "read_as_text": false,
         "required_on_create": true,
         "scale": null,
+        "searchable": true,
         "sql_type": "NVARCHAR(100) COLLATE \"SQL_Latin1_General_CP1_CI_AS\""
       }
     ],
@@ -1468,7 +1711,8 @@
   "dbo.ManualKey": {
     "columns": [
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": true,
@@ -1478,12 +1722,15 @@
         "nullable": false,
         "precision": null,
         "python_type": "str",
+        "read_as_text": false,
         "required_on_create": true,
         "scale": null,
+        "searchable": true,
         "sql_type": "NVARCHAR(10) COLLATE \"SQL_Latin1_General_CP1_CI_AS\""
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -1493,8 +1740,10 @@
         "nullable": false,
         "precision": null,
         "python_type": "str",
+        "read_as_text": false,
         "required_on_create": true,
         "scale": null,
+        "searchable": true,
         "sql_type": "NVARCHAR(100) COLLATE \"SQL_Latin1_General_CP1_CI_AS\""
       }
     ],
@@ -1514,7 +1763,8 @@
   "dbo.Project": {
     "columns": [
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": true,
@@ -1524,12 +1774,15 @@
         "nullable": false,
         "precision": null,
         "python_type": "int",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "INTEGER"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -1539,12 +1792,15 @@
         "nullable": false,
         "precision": null,
         "python_type": "str",
+        "read_as_text": false,
         "required_on_create": true,
         "scale": null,
+        "searchable": true,
         "sql_type": "NVARCHAR(200) COLLATE \"SQL_Latin1_General_CP1_CI_AS\""
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": [
           "dbo",
           "Category",
@@ -1558,12 +1814,15 @@
         "nullable": false,
         "precision": null,
         "python_type": "int",
+        "read_as_text": false,
         "required_on_create": true,
         "scale": null,
+        "searchable": false,
         "sql_type": "INTEGER"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": [
           "dbo",
           "Employee",
@@ -1577,12 +1836,15 @@
         "nullable": false,
         "precision": null,
         "python_type": "int",
+        "read_as_text": false,
         "required_on_create": true,
         "scale": null,
+        "searchable": false,
         "sql_type": "INTEGER"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": [
           "dbo",
           "Employee",
@@ -1596,12 +1858,15 @@
         "nullable": false,
         "precision": null,
         "python_type": "int",
+        "read_as_text": false,
         "required_on_create": true,
         "scale": null,
+        "searchable": false,
         "sql_type": "INTEGER"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -1611,12 +1876,15 @@
         "nullable": false,
         "precision": null,
         "python_type": "date",
+        "read_as_text": false,
         "required_on_create": true,
         "scale": null,
+        "searchable": false,
         "sql_type": "DATE"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -1626,12 +1894,15 @@
         "nullable": false,
         "precision": null,
         "python_type": "date",
+        "read_as_text": false,
         "required_on_create": true,
         "scale": null,
+        "searchable": false,
         "sql_type": "DATE"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -1641,12 +1912,15 @@
         "nullable": true,
         "precision": null,
         "python_type": "int",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "INTEGER"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": true,
         "is_primary_key": false,
@@ -1656,12 +1930,15 @@
         "nullable": true,
         "precision": null,
         "python_type": "str",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": true,
         "sql_type": "NVARCHAR(128) COLLATE \"SQL_Latin1_General_CP1_CI_AS\""
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": true,
         "is_primary_key": false,
@@ -1671,12 +1948,15 @@
         "nullable": true,
         "precision": null,
         "python_type": "datetime",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "DATETIME2"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": true,
         "is_primary_key": false,
@@ -1686,12 +1966,15 @@
         "nullable": true,
         "precision": null,
         "python_type": "str",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": true,
         "sql_type": "NVARCHAR(128) COLLATE \"SQL_Latin1_General_CP1_CI_AS\""
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": true,
         "is_primary_key": false,
@@ -1701,8 +1984,10 @@
         "nullable": true,
         "precision": null,
         "python_type": "datetime",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "DATETIME2"
       }
     ],
@@ -1731,7 +2016,8 @@
   "dbo.Spatial": {
     "columns": [
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": true,
@@ -1741,12 +2027,15 @@
         "nullable": false,
         "precision": null,
         "python_type": "int",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "INTEGER"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -1756,12 +2045,15 @@
         "nullable": false,
         "precision": null,
         "python_type": "str",
+        "read_as_text": false,
         "required_on_create": true,
         "scale": null,
+        "searchable": true,
         "sql_type": "NVARCHAR(100) COLLATE \"SQL_Latin1_General_CP1_CI_AS\""
       },
       {
-        "fetchable": false,
+        "comment": null,
+        "filterable": false,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -1771,12 +2063,15 @@
         "nullable": true,
         "precision": null,
         "python_type": "str",
+        "read_as_text": true,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "GEOGRAPHY"
       },
       {
-        "fetchable": false,
+        "comment": null,
+        "filterable": false,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -1786,12 +2081,15 @@
         "nullable": true,
         "precision": null,
         "python_type": "str",
+        "read_as_text": true,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "GEOMETRY"
       },
       {
-        "fetchable": false,
+        "comment": null,
+        "filterable": false,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -1801,12 +2099,15 @@
         "nullable": true,
         "precision": null,
         "python_type": "str",
+        "read_as_text": true,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "HIERARCHYID"
       },
       {
-        "fetchable": false,
+        "comment": null,
+        "filterable": false,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -1815,13 +2116,16 @@
         "name": "Variant",
         "nullable": true,
         "precision": null,
-        "python_type": null,
+        "python_type": "str",
+        "read_as_text": true,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "SQL_VARIANT"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": false,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -1831,8 +2135,10 @@
         "nullable": true,
         "precision": null,
         "python_type": "str",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "JSON"
       }
     ],
@@ -1855,7 +2161,8 @@
   "dbo.TaskNode": {
     "columns": [
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": true,
@@ -1865,12 +2172,15 @@
         "nullable": false,
         "precision": null,
         "python_type": "int",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "INTEGER"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -1880,12 +2190,15 @@
         "nullable": false,
         "precision": null,
         "python_type": "str",
+        "read_as_text": false,
         "required_on_create": true,
         "scale": null,
+        "searchable": true,
         "sql_type": "NVARCHAR(100) COLLATE \"SQL_Latin1_General_CP1_CI_AS\""
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": [
           "dbo",
           "TaskNode",
@@ -1899,8 +2212,10 @@
         "nullable": true,
         "precision": null,
         "python_type": "int",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "INTEGER"
       }
     ],
@@ -1921,7 +2236,8 @@
   "dbo.Versioned": {
     "columns": [
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": true,
@@ -1931,12 +2247,15 @@
         "nullable": false,
         "precision": null,
         "python_type": "int",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "INTEGER"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -1946,12 +2265,15 @@
         "nullable": false,
         "precision": null,
         "python_type": "str",
+        "read_as_text": false,
         "required_on_create": true,
         "scale": null,
+        "searchable": true,
         "sql_type": "NVARCHAR(100) COLLATE \"SQL_Latin1_General_CP1_CI_AS\""
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -1961,12 +2283,15 @@
         "nullable": false,
         "precision": null,
         "python_type": "datetime",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "DATETIME2"
       },
       {
-        "fetchable": true,
+        "comment": null,
+        "filterable": true,
         "foreign_key": null,
         "is_audit": false,
         "is_primary_key": false,
@@ -1976,8 +2301,10 @@
         "nullable": false,
         "precision": null,
         "python_type": "datetime",
+        "read_as_text": false,
         "required_on_create": false,
         "scale": null,
+        "searchable": false,
         "sql_type": "DATETIME2"
       }
     ],

@@ -1,108 +1,87 @@
 """
 reflection.py — Schema introspection, column classification, and Pydantic
-model generation across all configured schemas.
+model generation for every configured schema.
 
 Public entry point
--------------------
-    reflect_schemas() -> ReflectedSchema
+------------------
+    reflect_schemas() -> SchemaSnapshot
 
-Each call reflects all schemas in config.DB_SCHEMAS from scratch and
-returns a brand-new ReflectedSchema. Nothing is mutated in place, so the
-caller can swap in a new snapshot while in-flight requests finish against
-the previous one. A stale read during a rare refresh is an accepted cost
-— this module does no locking.
+Each call reflects config.DB_SCHEMAS from scratch and returns a brand-new,
+immutable SchemaSnapshot. Nothing is mutated in place, so the caller can swap
+a new snapshot in while in-flight requests finish against the previous one
+(see app.state). Tables are keyed by (schema, name) throughout, so same-named
+tables in different schemas never collide.
 
-Output shape
--------------
-Everything about a table lives in one TableInfo; everything about a column
-lives in one ColumnInfo nested underneath it. Downstream consumers (the
-metadata endpoint, CRUD routes, query layer) read from these directly —
-nothing needs to be re-derived from raw SQLAlchemy objects.
+How facts are gathered — two sources, one boundary
+--------------------------------------------------
+SQLAlchemy reflection supplies the facts it reads reliably at any privilege
+level: column names, types (with lengths/precision), nullability, primary
+keys, identity, and MS_Description comments. One additional catalog pass
+(_catalog_facts) supplies the facts SQLAlchemy either can't see or can't see
+reliably, merged into a single ColumnFacts per column:
 
-Multi-schema keying
---------------------
-Tables are keyed by (schema, name) throughout — in ReflectedSchema.tables
-and in generated Pydantic model class names — so two schemas with a table
-of the same name never collide.
+  is_computed / is_generated_always   sys.columns flags. SQLAlchemy derives
+                                      these from VIEW-DEFINITION-gated
+                                      definition text, so they reflect empty
+                                      under an identity lacking that grant;
+                                      the flags are visible with any object
+                                      permission and are always correct.
+  has_default / default_text          default_object_id (ungated) plus the
+                                      default's definition text (gated —
+                                      None without VIEW DEFINITION, which
+                                      degrades classification gracefully:
+                                      a value-generating default can't be
+                                      told from a constant one, so the
+                                      column stays editable-and-optional).
+  foreign_key                         sys.foreign_key_columns: one set-based
+                                      query for all schemas, keyed exactly
+                                      as the snapshot needs.
+
+Every classification decision reads each fact from exactly one source —
+there are no fallbacks consulting SQLAlchemy's gated attributes.
+
+The reflection identity needs only GRANT VIEW DEFINITION (database scope) —
+not db_datareader; reflection reads metadata, never rows. Validated against
+SQL Server 2025: a VIEW-DEFINITION-only login reflects with full parity to
+sysadmin (the integration matrix re-runs under one). VIEW DEFINITION also
+keeps alias-UDT columns visible: a user-defined type is its own securable,
+and without the grant its columns silently vanish from reflection.
 
 Column classification
-----------------------
-Two categories:
+---------------------
+  EXCLUDED   The column's type can't be accepted in a write payload:
+             binary/rowversion, XML, sql_variant, and the opaque registered
+             types (vector, geometry, geography). Surfaced read-only.
+  DB_OWNED   The database controls the value: identity, computed, GENERATED
+             ALWAYS period columns, a value-generating default (newid(),
+             sysutcdatetime(), ...), or a name listed in
+             config.DB_AUDIT_COLUMNS (trigger-populated audit columns have
+             no structural signature — SQL Server exposes no link between a
+             trigger and the columns it writes).
+  EDITABLE   Everything else; appears in the generated Create/Update models.
 
-  DB-owned       The database controls the value; the API never accepts it
-                 from a client. Detected two ways:
-                   - Structural: identity columns; computed and GENERATED ALWAYS
-                     period columns; or a server_default that invokes a
-                     value-generating SQL Server function (e.g. sysutcdatetime(),
-                     newid()).
-                   - Name-based: columns named in config.DB_AUDIT_COLUMNS.
-                     These are populated by a stored procedure or trigger,
-                     which SQL Server doesn't expose as column-level metadata
-                     — there is no structural way to detect them.
+Read/write policy is decided here, once
+---------------------------------------
+ColumnInfo carries the decisions the routes act on, so no consumer
+re-inspects SQLAlchemy types at request time:
 
-  User-editable  Everything else; surfaced in the Create/Update models.
+  searchable     free-text LIKE is valid against this column (real string
+                 types only — LIKE on xml/json/binary raises server-side).
+  filterable     value comparisons are valid (excludes binary and the types
+                 with no comparable Python value).
+  read_as_text   SELECTs must CAST this column to NVARCHAR: the driver
+                 returns raw CLR bytes for hierarchyid/geometry/geography
+                 and sql_variant has no fixed JSON shape; the CAST yields
+                 WKT / the path string / the value as text
+                 (see routes/crud._read_columns).
 
-If a table's audit columns aren't wired to a stored procedure or trigger,
-they'll stay NULL silently. That's an operational concern, not something
-schema introspection can detect.
+Types the mssql dialect doesn't model (SQL Server 2025 json/vector, the CLR
+types) are registered into the dialect's reflection map by app.mssql_types,
+so they arrive here as real named types and classify through the same
+isinstance machinery as every built-in.
 
-A note on reflection vs. privilege. The reflection identity needs exactly one
-grant: GRANT VIEW DEFINITION (database scope). It does NOT need db_datareader —
-reflection reads metadata, never rows — and a VIEW-DEFINITION-only identity
-reflects with full parity to sysadmin (validated live against SQL Server 2025;
-the integration matrix re-runs under such a login). VIEW DEFINITION is
-load-bearing in two ways: SQL Server NULLs the DEFINITION text columns
-(sys.computed_columns / sys.default_constraints / sys.check_constraints
-.definition) without it, so col.computed and col.server_default reflect empty;
-and an alias UDT's sys.types row is a securable of its own, so without VIEW
-DEFINITION columns of that type silently vanish from reflection entirely. For
-an identity that nonetheless lacks the grant, classification stays correct-but-
-degraded: the underlying flags are read straight from sys.columns (is_computed,
-generated_always_type, default_object_id — see _column_flags), which are
-visible with any object permission. The one distinction sys.columns can't make
-is the default's *text* — a value-generating default (newid()) can't be told
-from a constant one — enough to keep such a column from being marked required,
-but not enough to mark it DB-owned (it stays editable). The Terraform
-deployment grants the reflection identity VIEW DEFINITION (see
-infra/.../sql.tf); the structural reads here are the safety net for a database
-where it has not been granted.
-
-Excluded types
----------------
-Binary (VARBINARY, BINARY, IMAGE), rowversion/TIMESTAMP, XML, and
-sql_variant are excluded from write payloads. All are surfaced read-only in
-metadata; sql_variant additionally has no fixed shape (python_type None) and
-cannot be fetched raw, so reads CAST it to text like the CLR types.
-TIMESTAMP/rowversion columns are also server-generated — SQL Server will
-reject writes at the engine level, so excluding them prevents a confusing
-runtime error.
-
-Types the mssql dialect doesn't model
--------------------------------------
-The installed dialect only knows the types in its ischema_names table. Anything
-outside it — SQL Server 2025's json and vector, plus the CLR types
-geography/geometry/hierarchyid — would otherwise reflect as a nameless NullType
-(str(col.type) == "NULL", warned, un-isinstance-able). app.mssql_types registers
-each of them so reflection produces a real, named type that flows through the
-same isinstance/str machinery as every built-in. Their treatment then splits on
-two independent axes:
-
-  Writable?    json and hierarchyid are plain strings that round-trip, so they
-               stay EDITABLE. vector/geometry/geography are structured-but-opaque
-               (a raw embedding or spatial value a client can't hand-edit), so
-               they join _EXCLUDED_WRITE_TYPES alongside binary/XML.
-  Fetchable?   The CLR types (hierarchyid/geometry/geography) can't be read back
-               by pyodbc in a result row (ODBC type -151), so they are flagged
-               _UNFETCHABLE_TYPES and ColumnInfo.fetchable=False; the read path
-               CASTs them to text — WKT for spatial, the path string for
-               hierarchyid (see routes/crud._read_columns). sql_variant (-16) is
-               the same: excluded from writes AND unfetchable. json and vector
-               fetch fine (vector comes back as a JSON-array string).
-
-Decimal handling
------------------
-DECIMAL/NUMERIC/MONEY/SMALLMONEY map to Python Decimal, never float,
-to avoid silent precision loss on money values.
+DECIMAL/NUMERIC/MONEY/SMALLMONEY map to Python Decimal, never float, to
+avoid silent precision loss on money values.
 """
 
 from __future__ import annotations
@@ -112,14 +91,15 @@ import logging
 from dataclasses import dataclass, field
 from decimal import Decimal
 from enum import Enum, auto
-from typing import Annotated, Optional
+from functools import cached_property
+from typing import Annotated, NamedTuple, Optional
 
-from pydantic import Field, create_model
+from pydantic import BaseModel, Field, create_model
 from sqlalchemy import MetaData, Table, bindparam, text
 from sqlalchemy.sql.schema import Column
 from sqlalchemy.dialects.mssql import (
     BIGINT, BINARY, BIT, CHAR, DATE, DATETIME, DATETIME2,
-    DATETIMEOFFSET, DECIMAL, FLOAT, IMAGE, INTEGER, JSON, MONEY,
+    DATETIMEOFFSET, DECIMAL, FLOAT, IMAGE, INTEGER, MONEY,
     NCHAR, NTEXT, NUMERIC, NVARCHAR, REAL, SMALLDATETIME,
     SMALLINT, SMALLMONEY, SQL_VARIANT, TEXT, TIME, TIMESTAMP,
     TINYINT, UNIQUEIDENTIFIER, VARBINARY, VARCHAR, XML,
@@ -127,148 +107,230 @@ from sqlalchemy.dialects.mssql import (
 
 from app.config import DB_SCHEMAS, DB_AUDIT_COLUMNS
 from app.connection import reflection_engine, _connect_with_retry
-# Importing this registers VECTOR/GEOMETRY/GEOGRAPHY/HIERARCHYID/JSON into the
-# mssql dialect's reflection map, so metadata.reflect() below produces real typed
-# columns instead of NullType — and each then classifies by isinstance like any
-# other built-in. See app.mssql_types for why registration beats a catalog read.
+# Importing app.mssql_types registers VECTOR/GEOMETRY/GEOGRAPHY/HIERARCHYID/
+# JSON into the mssql dialect's reflection map before the first
+# metadata.reflect(), so those columns arrive as real named types.
 from app.mssql_types import VECTOR, GEOMETRY, GEOGRAPHY, HIERARCHYID
 
 logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Column classification
+# Classification vocabulary
 # ---------------------------------------------------------------------------
 
 class ColumnKind(Enum):
-    """Whether a column is writable by the client."""
+    """Who may write this column."""
     EDITABLE = auto()  # Client-writable; appears in Create/Update models.
     DB_OWNED = auto()  # Database controls the value; never client-writable.
-    EXCLUDED = auto()  # Type not supported for writes; read-only in metadata.
+    EXCLUDED = auto()  # Type not accepted in writes; read-only in metadata.
 
 
-# Trigger/default-populated columns (audit columns being the canonical case)
-# are named in config.DB_AUDIT_COLUMNS — they live there, not here, because
-# they vary per deployment. Matched case-insensitively in _classify().
-
-# SQL Server functions that generate a value server-side. A column whose
-# server_default contains one of these is DB-owned. Plain value defaults
-# (e.g. DEFAULT 0) are not included — the client may still override those.
-_DB_GENERATING_FUNCTIONS = {
+# SQL Server functions that generate a value server-side. A default whose text
+# contains one of these makes the column DB-owned; a plain value default
+# (DEFAULT 0) does not — the client may still override it. Matched by substring
+# because defaults reflect in varying wrappings: ((sysutcdatetime())),
+# (newid()), ([dbo].[fn]()).
+_VALUE_GENERATING_FUNCTIONS = (
     "sysutcdatetime", "sysdatetime", "sysdatetimeoffset",
     "getdate", "getutcdate", "current_timestamp",
     "newid", "newsequentialid",
-}
+)
 
-# Types excluded from write payloads. Surfaced read-only in metadata as str
-# where representable; sql_variant omitted entirely (no fixed shape).
+# Types never accepted in a write payload.
 _EXCLUDED_WRITE_TYPES = (
     VARBINARY, BINARY, IMAGE, TIMESTAMP,   # binary / rowversion
     XML,                                    # structured-but-opaque
     SQL_VARIANT,                            # no fixed shape
-    VECTOR, GEOMETRY, GEOGRAPHY,            # machine-generated / spatial (read-only); registered in app.mssql_types
+    VECTOR, GEOMETRY, GEOGRAPHY,            # machine-generated / spatial
 )
 
-_UNREPRESENTABLE_TYPES = (SQL_VARIANT,)
+# Types the read path must CAST to NVARCHAR: the driver returns raw CLR bytes
+# for the CLR UDTs, and sql_variant has no fixed JSON shape. The CAST yields
+# WKT for spatial, the path string for hierarchyid, the value as text for
+# sql_variant (see routes/crud._read_columns).
+_READ_AS_TEXT_TYPES = (HIERARCHYID, GEOMETRY, GEOGRAPHY, SQL_VARIANT)
 
-# Types the pyodbc driver cannot materialise in a result row: the CLR UDTs
-# (hierarchyid/geometry/geography → ODBC type -151) and sql_variant (-16). A plain
-# SELECT of such a column raises "ODBC SQL type -151/-16 is not yet supported" and
-# fails the whole read, so ColumnInfo.fetchable flags them for the read path to
-# CAST to NVARCHAR (see routes/crud._read_columns). The CLR types are recognised
-# via app.mssql_types; json and vector fetch fine and are deliberately absent.
-_UNFETCHABLE_TYPES = (HIERARCHYID, GEOMETRY, GEOGRAPHY, SQL_VARIANT)
+# Genuine string types — the only ones a free-text LIKE may run against.
+# LIKE against xml raises server-side (error 8116), and binary "text" isn't
+# text at all, so searchability is an explicit allowlist.
+_SEARCHABLE_TYPES = (NVARCHAR, NCHAR, NTEXT, VARCHAR, CHAR, TEXT)
 
 
-def _server_default_generates_value(col: Column) -> bool:
+# ---------------------------------------------------------------------------
+# Catalog facts — the one extra pass beyond SQLAlchemy reflection
+# ---------------------------------------------------------------------------
+
+class ForeignKeyRef(NamedTuple):
+    """The referenced side of a foreign key, as (schema, table, column)."""
+    schema: str
+    table: str
+    column: str
+
+
+@dataclass(frozen=True)
+class ColumnFacts:
     """
-    True if the column's server_default calls a known value-generating function.
-
-    Uses substring search rather than equality because SQLAlchemy reflects
-    SQL Server defaults in varying forms — e.g. ((sysutcdatetime())),
-    (sysutcdatetime()), ([dbo].[fn]()). The function names in
-    _DB_GENERATING_FUNCTIONS are distinctive enough that false positives
-    are not a realistic concern.
+    Per-column catalog facts SQLAlchemy reflection can't supply reliably.
+    See the module docstring for why each is read from sys.* directly.
     """
-    if col.server_default is None:
-        return False
-    raw = getattr(col.server_default, "arg", col.server_default)
-    normalized = str(raw).lower()
-    return any(fn in normalized for fn in _DB_GENERATING_FUNCTIONS)
+    is_computed: bool = False
+    is_generated_always: bool = False
+    has_default: bool = False
+    default_text: Optional[str] = None     # None without VIEW DEFINITION
+    foreign_key: Optional[ForeignKeyRef] = None
+
+    @property
+    def generates_value(self) -> bool:
+        """True if the default calls a value-generating function. Needs the
+        gated default text; False when it wasn't readable — the column then
+        stays editable-and-optional rather than DB-owned."""
+        if not self.default_text:
+            return False
+        lowered = self.default_text.lower()
+        return any(fn in lowered for fn in _VALUE_GENERATING_FUNCTIONS)
 
 
-def _is_db_owned(
-    col: Column,
-    generated_always: frozenset[tuple[str, str, str]],
-    computed: frozenset[tuple[str, str, str]] = frozenset(),
-) -> bool:
+_NO_FACTS = ColumnFacts()
+
+
+class CatalogFacts(dict):
+    """ColumnFacts by (schema, table, column); missing columns get defaults."""
+
+    def for_column(self, col: Column) -> ColumnFacts:
+        return self.get((col.table.schema, col.table.name, col.name), _NO_FACTS)
+
+
+def _catalog_facts(conn, schemas: list[str]) -> CatalogFacts:
     """
-    True if the database controls this column's value: identity, computed, a
-    GENERATED ALWAYS period column, or a value-generating default.
-
-    Computed and GENERATED ALWAYS columns are detected structurally, from the
-    sys.columns flags gathered in reflect_schemas() (the `computed` and
-    `generated_always` triple sets), NOT from SQLAlchemy's col.computed — because
-    col.computed is derived from VIEW-DEFINITION-gated definition text and comes
-    back empty under an identity lacking VIEW DEFINITION. col.computed and a
-    value-generating server_default are kept only as a redundant signal that
-    fires when VIEW DEFINITION happens to be held. Does NOT detect trigger- or
-    procedure-managed columns — those are caught by DB_AUDIT_COLUMNS in _classify.
+    Build the per-column facts map in two set-based queries: one over
+    sys.columns (flags + the default's gated definition text), one over
+    sys.foreign_key_columns. Only FKs whose referencing column lives in a
+    configured schema are recorded; the referenced side's schema/table come
+    from the catalog and may point outside the configured set (consumers
+    degrade such links gracefully).
     """
-    key = (col.table.schema, col.table.name, col.name)
-    if key in generated_always or key in computed:
-        return True
-    return (
-        getattr(col, "identity", None) is not None
-        or getattr(col, "computed", None) is not None
-        or _server_default_generates_value(col)
-    )
+    flags_stmt = text("""
+        SELECT s.name, t.name, c.name,
+               c.is_computed, c.generated_always_type, c.default_object_id,
+               dc.definition
+        FROM   sys.columns c
+        JOIN   sys.tables  t ON c.object_id = t.object_id
+        JOIN   sys.schemas s ON t.schema_id = s.schema_id
+        LEFT   JOIN sys.default_constraints dc
+                 ON dc.object_id = c.default_object_id
+        WHERE  s.name IN :schemas
+    """).bindparams(bindparam("schemas", expanding=True))
+
+    fk_stmt = text("""
+        SELECT sch_p.name, tab_p.name, col_p.name,
+               sch_r.name, tab_r.name, col_r.name
+        FROM   sys.foreign_key_columns fkc
+        JOIN   sys.tables  tab_p ON fkc.parent_object_id     = tab_p.object_id
+        JOIN   sys.schemas sch_p ON tab_p.schema_id          = sch_p.schema_id
+        JOIN   sys.columns col_p ON fkc.parent_object_id     = col_p.object_id
+                                AND fkc.parent_column_id     = col_p.column_id
+        JOIN   sys.tables  tab_r ON fkc.referenced_object_id = tab_r.object_id
+        JOIN   sys.schemas sch_r ON tab_r.schema_id          = sch_r.schema_id
+        JOIN   sys.columns col_r ON fkc.referenced_object_id = col_r.object_id
+                                AND fkc.referenced_column_id = col_r.column_id
+        WHERE  sch_p.name IN :schemas
+    """).bindparams(bindparam("schemas", expanding=True))
+
+    fks: dict[tuple[str, str, str], ForeignKeyRef] = {
+        (s, t, c): ForeignKeyRef(rs, rt, rc)
+        for s, t, c, rs, rt, rc in conn.execute(fk_stmt, {"schemas": schemas})
+    }
+
+    facts = CatalogFacts()
+    for s, t, c, computed, gen_always, default_obj, default_text in conn.execute(
+        flags_stmt, {"schemas": schemas}
+    ):
+        key = (s, t, c)
+        facts[key] = ColumnFacts(
+            is_computed=bool(computed),
+            is_generated_always=bool(gen_always),   # > 0 for period columns
+            has_default=bool(default_obj),          # != 0 → default constraint
+            default_text=default_text,              # None when gated or absent
+            foreign_key=fks.get(key),
+        )
+    return facts
 
 
-def _classify(
-    col: Column,
-    generated_always: frozenset[tuple[str, str, str]],
-    computed: frozenset[tuple[str, str, str]] = frozenset(),
-) -> ColumnKind:
+def _history_table_keys(conn, schemas: list[str]) -> set[tuple[str, str]]:
     """
-    Classify a column as EXCLUDED, DB_OWNED, or EDITABLE.
-
-    EXCLUDED is decided by type (_EXCLUDED_WRITE_TYPES): binary/rowversion, XML,
-    sql_variant, and VECTOR. VECTOR isn't a built-in the dialect knows, so it's
-    registered for reflection in app.mssql_types — once reflected as a real type,
-    it's excluded here by isinstance like all the others. Excluding wins over
-    every other category — an unwritable type is never client-writable.
-
-    DB_OWNED is reached two ways:
-      - Structural (_is_db_owned): identity, computed, a value-generating
-        default, or a GENERATED ALWAYS period column. Works regardless of
-        column name.
-      - Name-based (DB_AUDIT_COLUMNS): the one deliberate exception to
-        "decide structurally." SQL Server has no metadata linking a stored
-        procedure or trigger to the columns it writes, so audit columns
-        populated that way can only be identified by name. Comparison is
-        case-insensitive because SQL Server identifiers are.
+    (schema, table) pairs for temporal history tables (temporal_type = 1),
+    detected structurally so custom history-table names are handled. Excluded
+    from the snapshot entirely: SQL Server rejects direct writes to them, and
+    row history is a read veneer over the main table.
     """
+    stmt = text("""
+        SELECT s.name, t.name
+        FROM   sys.tables  t
+        JOIN   sys.schemas s ON t.schema_id = s.schema_id
+        WHERE  t.temporal_type = 1
+          AND  s.name IN :schemas
+    """).bindparams(bindparam("schemas", expanding=True))
+    return {(s, t) for s, t in conn.execute(stmt, {"schemas": schemas})}
+
+
+# ---------------------------------------------------------------------------
+# Per-column decisions — pure functions of (SQLAlchemy column, ColumnFacts)
+# ---------------------------------------------------------------------------
+
+def _classify(col: Column, facts: ColumnFacts) -> ColumnKind:
+    """EXCLUDED (by type) wins over everything; then DB-owned; else editable."""
     if isinstance(col.type, _EXCLUDED_WRITE_TYPES):
         return ColumnKind.EXCLUDED
-    if _is_db_owned(col, generated_always, computed) or col.name.lower() in DB_AUDIT_COLUMNS:
+    if (
+        col.identity is not None            # identity: ungated, SQLAlchemy-reliable
+        or facts.is_computed
+        or facts.is_generated_always
+        or facts.generates_value
+        or col.name.lower() in DB_AUDIT_COLUMNS
+    ):
         return ColumnKind.DB_OWNED
     return ColumnKind.EDITABLE
 
 
-# ---------------------------------------------------------------------------
-# SQL Server type -> Python type
-#
-# Order matters: more specific dialect types must precede generic bases or
-# isinstance() matches the wrong entry (e.g. BIGINT must precede Integer).
-# ---------------------------------------------------------------------------
+def _is_auto_generated_pk(col: Column, facts: ColumnFacts, pk_column_count: int) -> bool:
+    """
+    True if the database supplies this PK column's value, so it is omitted
+    from the Create model. Identity is the ordinary case. A *single-column*
+    PK with any default constraint counts too — the database can supply it
+    (NEWID()/sequence), and even when the default's text is privilege-hidden,
+    has_default alone is enough to know the client may omit it. Manual PKs
+    (no identity, no default) stay in the Create model, required.
+    """
+    return (
+        col.identity is not None
+        or (pk_column_count == 1 and facts.has_default)
+    )
+
+
+def _is_required_on_create(
+    col: Column, kind: ColumnKind, facts: ColumnFacts, pk_column_count: int
+) -> bool:
+    """
+    The single definition of "the client MUST supply this on create", used by
+    both the generated Create model and the metadata endpoint so the form the
+    frontend renders matches what the API enforces: editable, NOT NULL, no
+    default, and not a database-supplied PK. Update payloads are always fully
+    optional (partial-update semantics) and don't use this.
+    """
+    if kind is not ColumnKind.EDITABLE:
+        return False
+    if col.primary_key and _is_auto_generated_pk(col, facts, pk_column_count):
+        return False
+    return not col.nullable and not facts.has_default
+
 
 _TYPE_MAP: list[tuple[type, type]] = [
     (BIGINT, int), (SMALLINT, int), (TINYINT, int), (INTEGER, int),
 
     (BIT, bool),
 
-    # Exact numeric types -> Decimal to avoid float precision loss.
+    # Exact numerics -> Decimal to avoid float precision loss on money values.
     (DECIMAL, Decimal), (NUMERIC, Decimal),
     (MONEY, Decimal), (SMALLMONEY, Decimal),
 
@@ -285,112 +347,121 @@ _TYPE_MAP: list[tuple[type, type]] = [
     (NVARCHAR, str), (NCHAR, str), (NTEXT, str),
     (VARCHAR, str), (CHAR, str), (TEXT, str),
     (UNIQUEIDENTIFIER, str),
-
-    (JSON, dict),
 ]
 
 
-def _python_type(col: Column) -> Optional[type]:
+def _python_type(col: Column) -> type:
     """
-    Closest Python type for a column's SQL type.
-
-    Returns None for types with no fixed shape. Falls back to str for
-    anything else unmapped so model-building never raises on an unusual type.
+    Closest Python type for the column's SQL type; str for anything unmapped
+    (opaque and registered types included) so model-building never raises.
+    Order in _TYPE_MAP matters: specific dialect types precede generic bases
+    or isinstance() would match the wrong entry.
     """
-    if isinstance(col.type, _UNREPRESENTABLE_TYPES):
-        return None
     for sa_type, py_type in _TYPE_MAP:
         if isinstance(col.type, sa_type):
             return py_type
-    logger.debug("No type mapping for %s (%r); defaulting to str", col.name, col.type)
     return str
 
 
-def _reflected_max_length(col: Column) -> Optional[int]:
+def _max_length(col: Column) -> Optional[int]:
     """
     The column's usable character limit, or None where there isn't one.
-
-    Legacy TEXT/NTEXT need the exception: sys.columns.max_length for a LOB
-    pointer is 16 bytes, so the dialect reflects TEXT(16) and NTEXT(8) (after
-    the nchar halving). Neither is a real limit — passing it through would put
-    Field(max_length=16/8) on the generated models and reject valid input.
+    Legacy TEXT/NTEXT need the exception: their reflected "length" is the
+    16-byte LOB pointer (8 after the ntext halving), not a real limit —
+    surfacing it would make the generated models reject valid input.
     """
     if isinstance(col.type, (TEXT, NTEXT)):
         return None
     return getattr(col.type, "length", None)
 
 
+def _is_filterable(col: Column) -> bool:
+    """
+    True where value comparisons (=, <, BETWEEN, IN, LIKE) are meaningful.
+    Binary and rowversion compare as bytes (useless through JSON); the
+    registered opaque types (CLR/vector/json) have no comparable Python value
+    (python_type raises); xml needs naming explicitly — it subclasses Text so
+    it *looks* comparable, but the server rejects every operator against it
+    (error 8116). Rejecting here turns those into a clean client 400 without
+    a database round-trip.
+    """
+    if isinstance(col.type, XML):
+        return False
+    try:
+        py = col.type.python_type
+    except NotImplementedError:  # SQLAlchemy < 2.1 raised for opaque types...
+        return False
+    return py not in (bytes, object)  # ...2.1 returns `object` instead
+
+
 # ---------------------------------------------------------------------------
-# Output shape
+# Snapshot shapes — everything downstream consumers read
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
 class ColumnInfo:
     """
-    Everything downstream consumers need to know about one column, computed
-    once at reflection time so nothing re-inspects raw SQLAlchemy objects.
+    Everything the routes need to know about one column, decided once at
+    reflection time. No consumer re-derives facts from SQLAlchemy objects.
     """
     name: str
     kind: ColumnKind
-    python_type: Optional[type]   # None only for unrepresentable types
-    sql_type: str                 # str(col.type), for display/debugging
+    python_type: type            # str for unmapped/opaque types
+    sql_type: str                # str(col.type), for display
     nullable: bool
     is_primary_key: bool
-    is_audit: bool                # True for columns named in config.DB_AUDIT_COLUMNS
-    required_on_create: bool      # Client MUST supply this on create; see _is_required_on_create
+    is_audit: bool               # named in config.DB_AUDIT_COLUMNS
+    required_on_create: bool
+    searchable: bool             # free-text LIKE is valid against this column
+    filterable: bool             # value comparisons are valid
+    read_as_text: bool           # reads CAST it to NVARCHAR (CLR/sql_variant)
+    comment: Optional[str]       # MS_Description extended property
     max_length: Optional[int]
     precision: Optional[int]
     scale: Optional[int]
-    foreign_key: Optional[tuple[str, str, str]]  # (schema, table, column) or None
-    fetchable: bool = True        # False = pyodbc can't SELECT it; read path CASTs to text (see _UNFETCHABLE_TYPES)
+    foreign_key: Optional[ForeignKeyRef]
 
     @property
     def is_editable(self) -> bool:
         return self.kind is ColumnKind.EDITABLE
 
-    @property
-    def is_numeric(self) -> bool:
-        """True for types where range filters make sense."""
-        return self.python_type in (int, float, Decimal)
-
-    @property
-    def is_text(self) -> bool:
-        """True for types where free-text search makes sense."""
-        return self.python_type is str
-
 
 @dataclass(frozen=True)
 class TableInfo:
-    """
-    Everything about one reflected table: columns (in reflection order),
-    primary key (in constraint-definition order), and the two Pydantic
-    models built from its editable columns.
-    """
+    """One reflected table: columns in reflection order, PK in constraint
+    order, and the two Pydantic models generated from its editable columns."""
     schema: str
     name: str
-    columns: list[ColumnInfo]
-    primary_key: list[str]          # Tables without a PK are skipped entirely.
-    display_column: Optional[str]   # Best column for a human-readable row label; see _find_display_column.
-    concurrency_token: Optional[str]  # rowversion/TIMESTAMP column name, or None; see _find_concurrency_token.
-    sa_table: Table                 # SQLAlchemy Table object for building Core queries.
-    create_model: type              # Pydantic model for POST
-    update_model: type              # Pydantic model for PUT/PATCH
+    columns: tuple[ColumnInfo, ...]
+    primary_key: tuple[str, ...]      # Tables without a PK are never reflected.
+    display_column: Optional[str]     # Best human-readable row label, or None.
+    concurrency_token: Optional[str]  # rowversion column name, or None.
+    sa_table: Table                   # For building Core queries.
+    create_model: type[BaseModel]     # POST payload validation.
+    update_model: type[BaseModel]     # PUT/PATCH payload validation.
 
     @property
     def key(self) -> tuple[str, str]:
         return (self.schema, self.name)
 
+    @cached_property
+    def _columns_by_name(self) -> dict[str, ColumnInfo]:
+        return {c.name: c for c in self.columns}
+
     def column(self, name: str) -> Optional[ColumnInfo]:
-        return next((c for c in self.columns if c.name == name), None)
+        return self._columns_by_name.get(name)
 
 
 @dataclass(frozen=True)
-class ReflectedSchema:
+class SchemaSnapshot:
     """
-    Immutable snapshot of every configured schema. Tables are keyed by
-    (schema, name) so same-named tables in different schemas never collide.
+    Immutable snapshot of every configured schema, plus when it was taken
+    (surfaced by /admin/refresh so operators can see snapshot age).
     """
     tables: dict[tuple[str, str], TableInfo] = field(default_factory=dict)
+    reflected_at: datetime.datetime = field(
+        default_factory=lambda: datetime.datetime.now(datetime.timezone.utc)
+    )
 
     def get(self, schema: str, table: str) -> Optional[TableInfo]:
         return self.tables.get((schema, table))
@@ -406,464 +477,150 @@ class ReflectedSchema:
 
 
 # ---------------------------------------------------------------------------
-# Temporal history tables — excluded entirely, detected structurally.
+# Pydantic model generation
 # ---------------------------------------------------------------------------
-
-def _history_table_keys(conn, schemas: list[str]) -> set[tuple[str, str]]:
-    """
-    Return (schema, table) pairs for temporal history tables (temporal_type=1).
-    Detected structurally so custom history table names are handled correctly.
-    """
-    stmt = text("""
-        SELECT s.name, t.name
-        FROM   sys.tables  t
-        JOIN   sys.schemas s ON t.schema_id = s.schema_id
-        WHERE  t.temporal_type = 1
-          AND  s.name IN :schemas
-    """).bindparams(bindparam("schemas", expanding=True))
-
-    rows = conn.execute(stmt, {"schemas": schemas})
-    return {(schema, table) for schema, table in rows}
-
-
-@dataclass(frozen=True)
-class _ColumnFlags:
-    """
-    Per-column structural facts read straight from sys.columns, each a set of
-    (schema, table, column) triples.
-
-    These exist because SQLAlchemy derives the same facts from object DEFINITION
-    text — sys.computed_columns.definition for computed columns, the default
-    constraint's definition for defaults — and that text is hidden without GRANT
-    VIEW DEFINITION. Under an identity lacking that grant, col.computed and
-    col.server_default therefore come back empty
-    and the columns get misclassified: a computed column that SQL Server will
-    reject on write looks editable, and a NOT NULL column with a default looks
-    required. The flags read here — is_computed, generated_always_type,
-    default_object_id — are plain sys.columns attributes, visible with only table
-    access, so they are correct regardless of VIEW DEFINITION. This is the same
-    explicit-sys.* approach the FK, history, and period-column queries already use.
-
-    `defaulted` is deliberately partial: default_object_id reveals THAT a column
-    has a default, but the default's text (newid() vs a constant) stays gated, so
-    a value-generating default can't be distinguished from a plain one at this
-    privilege level — enough to fix required-on-create, not enough to mark the
-    column DB_OWNED. See _server_default_generates_value (best-effort, needs the
-    text and so only fires when VIEW DEFINITION is held).
-    """
-    computed: frozenset[tuple[str, str, str]] = frozenset()
-    generated_always: frozenset[tuple[str, str, str]] = frozenset()
-    defaulted: frozenset[tuple[str, str, str]] = frozenset()
-
-
-def _column_flags(conn, schemas: list[str]) -> _ColumnFlags:
-    """
-    Read is_computed / generated_always_type / default_object_id for every column
-    in the configured schemas in one pass — the structural source of truth for
-    column classification, robust to the reflection identity's privilege.
-
-    GENERATED ALWAYS period columns (ROW START / ROW END) and computed columns are
-    both rejected by SQL Server on any explicit write, so both are DB_OWNED.
-
-    Note this is for the privilege-gated *flag* gaps only — facts reflection can't
-    see without VIEW DEFINITION. An unknown *type* like VECTOR is handled the other
-    way, by registering it for reflection (app.mssql_types), not read here.
-    """
-    stmt = text("""
-        SELECT s.name, t.name, c.name,
-               c.is_computed, c.generated_always_type, c.default_object_id
-        FROM   sys.columns c
-        JOIN   sys.tables  t ON c.object_id = t.object_id
-        JOIN   sys.schemas s ON t.schema_id = s.schema_id
-        WHERE  s.name IN :schemas
-    """).bindparams(bindparam("schemas", expanding=True))
-
-    computed: set[tuple[str, str, str]] = set()
-    generated_always: set[tuple[str, str, str]] = set()
-    defaulted: set[tuple[str, str, str]] = set()
-    for sname, tname, cname, is_computed, gen_always, default_obj in conn.execute(stmt, {"schemas": schemas}):
-        key = (sname, tname, cname)
-        if is_computed:
-            computed.add(key)
-        if gen_always:              # generated_always_type > 0 for period columns
-            generated_always.add(key)
-        if default_obj:             # default_object_id != 0 → has a default constraint
-            defaulted.add(key)
-    return _ColumnFlags(frozenset(computed), frozenset(generated_always), frozenset(defaulted))
-
-
-def _foreign_key_map(conn, schemas: list[str]) -> dict[tuple[str, str, str], tuple[str, str, str]]:
-    """
-    Build the FK column map by querying sys.foreign_key_columns directly.
-
-    Not a privilege workaround: SQLAlchemy's own FK reflection (INFORMATION_
-    SCHEMA.REFERENTIAL_CONSTRAINTS) works at every privilege level, VIEW
-    DEFINITION or not — verified live. This query exists because it is one
-    set-based read for every configured schema (reflection's is one query per
-    table), it yields exactly the (schema, table, column) keying the snapshot
-    uses, and it keeps all reflected metadata on the same explicit-sys.*
-    source as the history / flag / CHECK queries.
-
-    Only foreign keys whose REFERENCING column lives in a configured schema
-    are returned (matching how tables are reflected). The referenced table may
-    live in another schema; its real schema is taken from the catalog, never
-    assumed.
-
-    Keyed by (schema, table, column) of the referencing column.
-    Value is (schema, table, column) of the referenced column.
-    """
-    stmt = text("""
-        SELECT
-            sch_p.name, tab_p.name, col_p.name,
-            sch_r.name, tab_r.name, col_r.name
-        FROM   sys.foreign_key_columns fkc
-        JOIN   sys.tables  tab_p ON fkc.parent_object_id     = tab_p.object_id
-        JOIN   sys.schemas sch_p ON tab_p.schema_id          = sch_p.schema_id
-        JOIN   sys.columns col_p ON fkc.parent_object_id     = col_p.object_id
-                                AND fkc.parent_column_id     = col_p.column_id
-        JOIN   sys.tables  tab_r ON fkc.referenced_object_id = tab_r.object_id
-        JOIN   sys.schemas sch_r ON tab_r.schema_id          = sch_r.schema_id
-        JOIN   sys.columns col_r ON fkc.referenced_object_id = col_r.object_id
-                                AND fkc.referenced_column_id = col_r.column_id
-        WHERE  sch_p.name IN :schemas
-    """).bindparams(bindparam("schemas", expanding=True))
-
-    rows = conn.execute(stmt, {"schemas": schemas})
-    return {
-        (fk_schema, fk_table, fk_column): (ref_schema, ref_table, ref_column)
-        for fk_schema, fk_table, fk_column, ref_schema, ref_table, ref_column in rows
-    }
-
-
-def _check_constraints(
-    conn, schemas: list[str]
-) -> dict[tuple[str, str], dict[str, tuple[Optional[str], str]]]:
-    """
-    Reflect CHECK constraint definitions from sys.check_constraints.
-
-    SQLAlchemy's mssql dialect does NOT reflect CHECK constraints — metadata.reflect()
-    never attaches a CheckConstraint to table.constraints, and Inspector.
-    get_check_constraints() raises NotImplementedError — so the constraint text is
-    invisible through reflection. It IS available in the catalog, so it's read here
-    the same explicit-sys.* way as FK / history / computed metadata. This is what
-    lets a CHECK violation quote the actual rule (see errors.friendly_constraint_violation);
-    without it the app can only echo the constraint name.
-
-    definition is VIEW-DEFINITION-gated (the deployment grants it to the reflection
-    identity; SA/db_owner hold it inherently). Where it isn't held the column comes
-    back NULL, so those rows are filtered out and the error path degrades to naming
-    the rule rather than quoting it — never wrong, just less specific.
-
-    parent_column_id names the column for a column-level (single-column) check; a
-    table-level check reports column None and the caller recovers columns from the
-    definition text. Keyed by (schema, table) → { constraint_name: (column|None, definition) }.
-    """
-    stmt = text("""
-        SELECT s.name, t.name, cc.name,
-               COL_NAME(cc.parent_object_id, cc.parent_column_id) AS col_name,
-               cc.definition
-        FROM   sys.check_constraints cc
-        JOIN   sys.tables  t ON cc.parent_object_id = t.object_id
-        JOIN   sys.schemas s ON t.schema_id         = s.schema_id
-        WHERE  s.name IN :schemas
-          AND  cc.definition IS NOT NULL
-    """).bindparams(bindparam("schemas", expanding=True))
-
-    out: dict[tuple[str, str], dict[str, tuple[Optional[str], str]]] = {}
-    for sname, tname, cname, col_name, definition in conn.execute(stmt, {"schemas": schemas}):
-        out.setdefault((sname, tname), {})[cname] = (col_name, definition)
-    return out
-
-
-# ---------------------------------------------------------------------------
-# Pydantic model builders
-#
-# Both builders consume the already-computed ColumnInfo list so column
-# classification happens exactly once (in _build_column_info), not here.
-# ---------------------------------------------------------------------------
-
-def _is_auto_generated_pk(
-    col: Column,
-    pk_column_count: int,
-    defaulted: frozenset[tuple[str, str, str]] = frozenset(),
-) -> bool:
-    """
-    True if the database supplies this PK column's value, meaning it should
-    be omitted from the Create model. Manual PKs (no identity/generating
-    default) stay in the Create model so the caller can supply the value.
-
-    autoincrement="auto" is SQLAlchemy's default but only actually triggers
-    auto-generation for single-column integer PKs, so pk_column_count==1
-    guards against incorrectly excluding a column from a composite PK.
-
-    A single-column PK that merely *has* a default constraint (in `defaulted`,
-    read structurally from sys.columns) is treated as auto-generated too: under
-    an identity lacking VIEW DEFINITION the default's text is hidden, so a
-    NEWID()/sequence default can't be confirmed via _server_default_generates_value
-    — but a default on a lone PK means the database can supply it. The same
-    pk_column_count==1 guard keeps this from touching composite PKs.
-    """
-    return (
-        col.autoincrement is True
-        or (col.autoincrement == "auto" and pk_column_count == 1)
-        or getattr(col, "identity", None) is not None
-        or _server_default_generates_value(col)
-        or (pk_column_count == 1 and (col.table.schema, col.table.name, col.name) in defaulted)
-    )
-
-
-def _is_required_on_create(
-    col: Column,
-    kind: ColumnKind,
-    pk_column_count: int,
-    defaulted: frozenset[tuple[str, str, str]] = frozenset(),
-) -> bool:
-    """
-    True if a client MUST supply this column's value when creating a row.
-
-    A column is required on create when it is client-editable, NOT NULL, has
-    no default (neither a Python-side nor a server default), and is not an
-    auto-generated primary key (those are excluded from the create payload
-    entirely and supplied by the database).
-
-    "Has a server default" is decided structurally via `defaulted` (sys.columns
-    default_object_id), not col.server_default: the latter is reflected from
-    VIEW-DEFINITION-gated text and is empty without that grant,
-    which would otherwise mark a NOT NULL defaulted column (e.g. IsActive DEFAULT 1,
-    or a NEWID() column) as required and force the client to invent a value the
-    database was meant to supply. col.server_default stays in the check as a
-    redundant signal for when VIEW DEFINITION is held.
-
-    This is the SINGLE definition of "required" used by both the generated
-    create model and the metadata endpoint, so the form the frontend renders
-    matches what the API actually enforces. Update payloads are always fully
-    optional — partial-update semantics — and do not use this.
-    """
-    if kind is not ColumnKind.EDITABLE:
-        return False
-    if col.primary_key and _is_auto_generated_pk(col, pk_column_count, defaulted):
-        return False
-    return (
-        not col.nullable
-        and col.default is None
-        and col.server_default is None
-        and (col.table.schema, col.table.name, col.name) not in defaulted
-    )
-
 
 def _annotation(info: ColumnInfo):
     """
-    Pydantic field annotation for a column.
-
-    Applies the column's max length to string fields so an over-length value
-    is rejected at validation time — with per-field detail in the response —
-    instead of round-tripping to the database and coming back as a generic
-    constraint violation. This is the one place the API pre-validates on
-    behalf of the database; everything semantic (numeric precision/scale,
-    CHECK constraints, FK existence) is left to the database, which remains
-    the source of truth.
+    Field annotation for a column. Max length is enforced at validation time
+    (with per-field detail) rather than round-tripping to the database as a
+    truncation error; everything semantic — precision, CHECK rules, FK
+    existence — is left to the database, which stays the source of truth.
     """
     if info.python_type is str and info.max_length:
         return Annotated[str, Field(max_length=info.max_length)]
     return info.python_type
 
 
-def _build_create_model(
-    schema: str,
-    table: Table,
-    columns: list[ColumnInfo],
-    defaulted: frozenset[tuple[str, str, str]] = frozenset(),
-) -> type:
+def _build_models(
+    schema: str, table: Table, columns: list[ColumnInfo], facts: CatalogFacts
+) -> tuple[type[BaseModel], type[BaseModel]]:
     """
-    Pydantic model for POST payloads.
+    The Create and Update models for a table, from its editable columns.
 
-    A field is required if NOT NULL with no default; otherwise Optional.
-    Auto-generated PKs are excluded (database supplies the value).
+    Create: fields required per required_on_create; database-supplied PKs
+    omitted entirely (manual PKs stay, required). Update: every editable
+    non-PK field is Optional[T] = None — combined with
+    model_dump(exclude_unset=True) in the routes, a client can distinguish
+    "omit this field" from "explicitly clear it".
     """
-    pk_count = len(list(table.primary_key.columns))
-    raw_cols = {c.name: c for c in table.columns}
-    fields: dict[str, tuple] = {}
+    pk_count = len(table.primary_key.columns)
 
+    create_fields: dict[str, tuple] = {}
+    update_fields: dict[str, tuple] = {}
     for info in columns:
-        if info.kind is not ColumnKind.EDITABLE:
+        if not info.is_editable:
             continue
-        col = raw_cols[info.name]
-        if info.is_primary_key and _is_auto_generated_pk(col, pk_count, defaulted):
-            continue
-
-        # EDITABLE columns always have a resolved python_type — None is only
-        # set for EXCLUDED types, which are filtered out above. If this
-        # fires, _classify and _EXCLUDED_WRITE_TYPES have fallen out of sync.
-        if info.python_type is None:
-            raise RuntimeError(
-                f"Column {info.name!r} is EDITABLE but has python_type=None — "
-                f"check _classify() and _EXCLUDED_WRITE_TYPES."
-            )
         annotation = _annotation(info)
+        if not info.is_primary_key:
+            update_fields[info.name] = (Optional[annotation], None)
+        col = table.columns[info.name]
+        if info.is_primary_key and _is_auto_generated_pk(col, facts.for_column(col), pk_count):
+            continue
         if info.required_on_create:
-            fields[info.name] = (annotation, ...)
+            create_fields[info.name] = (annotation, ...)
         else:
-            fields[info.name] = (Optional[annotation], None)
+            create_fields[info.name] = (Optional[annotation], None)
 
     # create_model's typed overloads don't cover the dynamic **fields form (a
-    # known Pydantic typing limitation); the runtime call is correct.
-    return create_model(f"{schema}_{table.name}_Create", **fields)  # pyright: ignore[reportCallIssue, reportArgumentType]
-
-
-def _build_update_model(schema: str, table: Table, columns: list[ColumnInfo]) -> type:
-    """
-    Pydantic model for PUT/PATCH payloads.
-
-    All fields are Optional[T] = None. Combined with model_dump(exclude_unset=True)
-    in the route layer, this lets the client distinguish "omit this field"
-    (absent from the dump) from "explicitly clear this field" (present, None).
-    PKs are excluded — they're supplied via the URL path, not the body.
-    """
-    editable = [
-        info for info in columns
-        if info.kind is ColumnKind.EDITABLE and not info.is_primary_key
-    ]
-    for info in editable:
-        if info.python_type is None:  # Same invariant as _build_create_model.
-            raise RuntimeError(
-                f"Column {info.name!r} is EDITABLE but has python_type=None — "
-                f"check _classify() and _EXCLUDED_WRITE_TYPES."
-            )
-    fields: dict[str, tuple] = {
-        info.name: (Optional[_annotation(info)], None)
-        for info in editable
-    }
-    # See _build_create_model: dynamic **fields isn't covered by the overloads.
-    return create_model(f"{schema}_{table.name}_Update", **fields)  # pyright: ignore[reportCallIssue, reportArgumentType]
+    # known Pydantic typing limitation); the runtime calls are correct.
+    return (
+        create_model(f"{schema}_{table.name}_Create", **create_fields),  # pyright: ignore[reportCallIssue, reportArgumentType]
+        create_model(f"{schema}_{table.name}_Update", **update_fields),  # pyright: ignore[reportCallIssue, reportArgumentType]
+    )
 
 
 # ---------------------------------------------------------------------------
-# Column / table assembly
+# Table assembly
 # ---------------------------------------------------------------------------
 
-# Keywords that suggest a column is a good human-readable label for a row.
-# Checked as substrings against the lowercased column name.
+# Substrings that suggest a column is a good human-readable row label, in
+# priority order: a column containing "name" beats one containing "code"
+# regardless of column order in the table.
 _LABEL_HINTS = ("name", "label", "title", "description", "code")
 
 
-def _find_display_column(columns: list[ColumnInfo], pk_names: set[str]) -> Optional[str]:
+def _find_display_column(columns: list[ColumnInfo]) -> Optional[str]:
     """
-    Find the best column to use as a human-readable label for a row.
-
-    Used by the frontend to display a meaningful value in FK dropdowns and
-    list views rather than a raw ID. Returns the column name, or None if
-    no suitable column exists (caller falls back to the raw PK value).
-
-    Priority:
-      1. Non-PK editable column whose name contains the highest-priority
-         display keyword (name > label > title > description > code).
-         Hints are checked in order across all columns before moving to
-         the next hint — so a column containing "name" always wins over
-         one containing "code", regardless of column order in the table.
-      2. First non-PK editable string column.
-      3. None.
+    The best column to label a row with in FK dropdowns and list views, or
+    None (callers fall back to the raw PK value): highest-priority label hint
+    first, then the first editable string column.
     """
-    candidates = [c for c in columns if c.name not in pk_names and c.is_editable]
-
+    candidates = [c for c in columns if c.is_editable and not c.is_primary_key]
     for hint in _LABEL_HINTS:
         for col in candidates:
             if hint in col.name.lower():
                 return col.name
-
     for col in candidates:
-        if col.is_text:
+        if col.python_type is str:
             return col.name
-
     return None
 
 
 def _find_concurrency_token(table: Table) -> Optional[str]:
     """
-    Return the name of the table's rowversion/TIMESTAMP column, or None.
-
-    A SQL Server table may have at most one rowversion (a.k.a. TIMESTAMP) column;
-    it is an 8-byte binary value the engine bumps automatically on every change to
-    the row, which makes it the ideal optimistic-concurrency token. When present,
-    update/delete can require the client's expected value (via If-Match) and reject
-    the write if the row has changed since it was read (see routes/crud.py). When
-    absent, writes fall back to last-writer-wins — protection is purely additive.
-
-    Detected by type (mssql ROWVERSION subclasses TIMESTAMP), not name, so any
-    column name works. The column is already EXCLUDED from writes by _classify.
+    The table's rowversion column name, or None. SQL Server allows at most one
+    rowversion per table; the engine bumps it on every write, which makes it
+    the optimistic-concurrency token the If-Match flow checks (routes/crud.py).
+    Detected by type — any column name works.
     """
     return next((c.name for c in table.columns if isinstance(c.type, TIMESTAMP)), None)
 
 
-def _build_column_info(
-    col: Column,
-    generated_always: frozenset[tuple[str, str, str]],
-    fk_map: dict[tuple[str, str, str], tuple[str, str, str]],
-    computed: frozenset[tuple[str, str, str]] = frozenset(),
-    defaulted: frozenset[tuple[str, str, str]] = frozenset(),
-) -> ColumnInfo:
-    pk_column_count = len(col.table.primary_key.columns)
-    kind = _classify(col, generated_always, computed)
-    is_audit = col.name.lower() in DB_AUDIT_COLUMNS
-    fk = fk_map.get((col.table.schema or "", col.table.name, col.name))
+def _build_column_info(col: Column, facts: ColumnFacts, pk_column_count: int) -> ColumnInfo:
+    kind = _classify(col, facts)
     return ColumnInfo(
         name=col.name,
         kind=kind,
         python_type=_python_type(col),
-        # str(col.type) is correct for the app.mssql_types types too: they reflect
-        # as real named types now, so this reads "VECTOR"/"JSON"/"GEOGRAPHY"/…,
-        # not "NULL".
         sql_type=str(col.type),
         nullable=bool(col.nullable),
         is_primary_key=col.primary_key,
-        is_audit=is_audit,
-        required_on_create=_is_required_on_create(col, kind, pk_column_count, defaulted),
-        max_length=_reflected_max_length(col),
+        is_audit=col.name.lower() in DB_AUDIT_COLUMNS,
+        required_on_create=_is_required_on_create(col, kind, facts, pk_column_count),
+        searchable=isinstance(col.type, _SEARCHABLE_TYPES),
+        filterable=_is_filterable(col),
+        read_as_text=isinstance(col.type, _READ_AS_TEXT_TYPES),
+        comment=col.comment,
+        max_length=_max_length(col),
         precision=getattr(col.type, "precision", None),
         scale=getattr(col.type, "scale", None),
-        foreign_key=fk,
-        fetchable=not isinstance(col.type, _UNFETCHABLE_TYPES),
+        foreign_key=facts.foreign_key,
     )
 
 
 def _build_table_info(
-    schema: str,
-    table: Table,
-    generated_always: frozenset[tuple[str, str, str]],
-    fk_map: dict[tuple[str, str, str], tuple[str, str, str]],
-    computed: frozenset[tuple[str, str, str]] = frozenset(),
-    defaulted: frozenset[tuple[str, str, str]] = frozenset(),
-    check_constraints: dict[str, tuple[Optional[str], str]] | None = None,
+    table: Table, facts: CatalogFacts, *, schema: Optional[str] = None
 ) -> TableInfo:
-    columns = [_build_column_info(c, generated_always, fk_map, computed, defaulted) for c in table.columns]
-    pk_names = {c.name for c in table.primary_key.columns}
+    # `schema` overrides the snapshot key only for test harnesses that run
+    # hand-built tables against a schemaless engine; reflected tables always
+    # carry their real schema (reflect_schemas reflects per explicit schema).
+    schema = schema or table.schema
+    assert schema is not None
 
-    # CHECK constraints aren't reflected by the mssql dialect (see _check_constraints),
-    # so stash the catalog-sourced definitions on the SQLAlchemy Table's own `info`
-    # dict. The error layer reads them from there at violation time (errors.py) —
-    # keeping map_database_exception(exc, sa_table) able to quote the failed rule
-    # without any new parameter threading. Keyed constraint_name → (column|None, definition).
-    table.info["check_constraints"] = check_constraints or {}
-
-    # Disable SQLAlchemy's implicit RETURNING (the OUTPUT clause) for this table.
-    # SQL Server rejects an OUTPUT clause on any table that has a trigger
-    # (error 334), and this app reflects arbitrary schemas where a table may
-    # carry triggers — audit triggers populating CreatedBy/ModifiedDate via
-    # SUSER_SNAME() being the canonical case. With implicit RETURNING off,
-    # SQLAlchemy fetches generated keys via SELECT SCOPE_IDENTITY() instead,
-    # which is trigger-safe; result.inserted_primary_key still works, so the
-    # create flow that fetches the new row back is unaffected.
+    # SQL Server rejects an OUTPUT clause on any table with a trigger (error
+    # 334), and reflected schemas may carry triggers (audit triggers being the
+    # canonical case). With implicit RETURNING off, SQLAlchemy fetches
+    # generated keys via SCOPE_IDENTITY() instead, which is trigger-safe.
     table.implicit_returning = False
+
+    pk_count = len(table.primary_key.columns)
+    columns = [
+        _build_column_info(col, facts.for_column(col), pk_count)
+        for col in table.columns
+    ]
+    created, updated = _build_models(schema, table, columns, facts)
 
     return TableInfo(
         schema=schema,
         name=table.name,
-        columns=columns,
-        primary_key=[c.name for c in table.primary_key.columns],
-        display_column=_find_display_column(columns, pk_names),
+        columns=tuple(columns),
+        primary_key=tuple(c.name for c in table.primary_key.columns),
+        display_column=_find_display_column(columns),
         concurrency_token=_find_concurrency_token(table),
         sa_table=table,
-        create_model=_build_create_model(schema, table, columns, defaulted),
-        update_model=_build_update_model(schema, table, columns),
+        create_model=created,
+        update_model=updated,
     )
 
 
@@ -871,88 +628,56 @@ def _build_table_info(
 # Public entry point
 # ---------------------------------------------------------------------------
 
-def reflect_schemas() -> ReflectedSchema:
+def reflect_schemas() -> SchemaSnapshot:
     """
     Reflect every schema in config.DB_SCHEMAS and return a fresh snapshot.
 
-    Each call builds and discards a local MetaData, so concurrent calls
-    cannot corrupt shared state. A request holding an older snapshot simply
-    finishes against it — no locking is needed or attempted.
+    Each call builds and discards a local MetaData, so concurrent calls can't
+    corrupt shared state. Tables without a primary key are skipped — the
+    routes have no way to address individual rows in them. Temporal history
+    tables are excluded entirely.
 
-    Reflecting multiple schemas into one MetaData is safe: SQLAlchemy keys
-    each table by its fully-qualified name (schema.table) internally, so
-    tables from different schemas never collide even if they share a name.
-
-    Tables without a primary key are skipped — the routing layer has no way
-    to address individual rows in such a table.
+    The connection goes through the shared transient-fault retry: reflection
+    runs at startup (and on /admin/refresh), which is a fresh engine's first,
+    cold connect — a serverless database resuming from auto-pause can drop
+    it, and without the retry that aborts startup outright. reflection_engine
+    is read at call time so tests can substitute it.
     """
     metadata = MetaData()
 
-    # Acquire the connection through the same transient-fault retry as user
-    # connections, rather than reflection_engine.connect() directly. Reflection
-    # runs at startup (and on /admin/refresh), so this is a fresh engine's first
-    # connect — the cold path — and a serverless database resuming from auto-pause,
-    # or a failover, can drop it (Communication link failure, surfaced as
-    # ResourceClosedError during the dialect's version probe). Without the retry
-    # that aborts startup outright and the container restart-loops until the
-    # database is warm. reflection_engine is read at call time so a test that swaps
-    # it (integration conftest) is still honoured.
     conn = _connect_with_retry(reflection_engine)
     try:
         for schema in DB_SCHEMAS:
-            # resolve_fks=False: with the default (True), SQLAlchemy recursively
-            # reflects every FK-referenced table into this MetaData — including
-            # tables in schemas NOT in DB_SCHEMAS, which would then surface in
-            # the snapshot misclassified (the sys.* flag/FK/CHECK queries below
-            # filter to the configured schemas). FK *metadata* on the reflected
-            # columns is unaffected, and this app never resolves SQLAlchemy-level
-            # FK targets — cross-table links come from _foreign_key_map.
+            # resolve_fks=False: the default recursively reflects every
+            # FK-referenced table — including tables in schemas outside
+            # DB_SCHEMAS, which must never enter the snapshot (their catalog
+            # facts wouldn't be gathered and they'd misclassify). Cross-table
+            # links come from _catalog_facts, not SQLAlchemy FK objects.
             metadata.reflect(bind=conn, schema=schema, resolve_fks=False)
         history_keys = _history_table_keys(conn, DB_SCHEMAS)
-        flags        = _column_flags(conn, DB_SCHEMAS)
-        fk_map       = _foreign_key_map(conn, DB_SCHEMAS)
-        check_map    = _check_constraints(conn, DB_SCHEMAS)
+        facts = _catalog_facts(conn, DB_SCHEMAS)
     finally:
         conn.close()
 
-    if not fk_map:
-        logger.info("No foreign key relationships found across configured schemas.")
-
     tables: dict[tuple[str, str], TableInfo] = {}
     skipped_no_pk: list[str] = []
-
     for table in metadata.tables.values():
         schema = table.schema
         if schema is None or schema not in DB_SCHEMAS:
-            # schema is always set (tables are reflected per explicit schema), so
-            # the None arm just makes that provable to the type checker. The
-            # DB_SCHEMAS arm is belt-and-braces with resolve_fks=False above:
-            # only configured schemas may enter the snapshot — a table from any
-            # other schema would carry empty flag/FK/CHECK metadata and
-            # misclassify its columns.
-            continue
+            continue  # belt-and-braces with resolve_fks=False above
         if (schema, table.name) in history_keys:
             continue
         if not table.primary_key.columns:
             skipped_no_pk.append(f"{schema}.{table.name}")
             continue
-        tables[(schema, table.name)] = _build_table_info(
-            schema, table, flags.generated_always, fk_map,
-            flags.computed, flags.defaulted, check_map.get((schema, table.name), {}),
-        )
+        tables[(schema, table.name)] = _build_table_info(table, facts)
 
     if skipped_no_pk:
         logger.info("Skipped %d table(s) with no primary key: %s",
-                     len(skipped_no_pk), ", ".join(sorted(skipped_no_pk)))
+                    len(skipped_no_pk), ", ".join(sorted(skipped_no_pk)))
     if history_keys:
         logger.info("Excluded %d temporal history table(s)", len(history_keys))
-    if flags.computed:
-        logger.info("Detected %d computed column(s)", len(flags.computed))
-    if flags.generated_always:
-        logger.info("Detected %d GENERATED ALWAYS column(s) across temporal table(s)",
-                     len(flags.generated_always))
-
     logger.info("Reflected %d table(s) across %d schema(s): %s",
                 len(tables), len(DB_SCHEMAS), ", ".join(DB_SCHEMAS))
 
-    return ReflectedSchema(tables=tables)
+    return SchemaSnapshot(tables=tables)

@@ -279,7 +279,11 @@ function FilterChip({
 
 export function FilterBar({ columns, filters, onChange, schema, table }: FilterBarProps) {
   const active = columns.filter((c) => c.name in filters)
-  const available = columns.filter((c) => !(c.name in filters))
+  // Columns reflection marked non-filterable (xml, binary/rowversion, vector,
+  // spatial, json) are never offered — the server refuses value filters on
+  // them, so a chip could only ever produce an error toast. `!== false` keeps
+  // columns from older payloads/fixtures without the field fully capable.
+  const available = columns.filter((c) => !(c.name in filters) && c.filterable !== false)
 
   return (
     <div className="flex flex-wrap items-center gap-2 duration-300 animate-in fade-in slide-in-from-top-1">

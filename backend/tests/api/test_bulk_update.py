@@ -17,9 +17,10 @@ from sqlalchemy.dialects.mssql import INTEGER, NVARCHAR
 from sqlalchemy.pool import StaticPool
 
 from app import reflection
+from tests.conftest import pk_default_facts
 from app.dependencies import get_db, get_snapshot
 from app.main import app
-from app.reflection import ReflectedSchema
+from app.reflection import SchemaSnapshot
 
 
 def _create(client, **fields):
@@ -270,8 +271,8 @@ def uniq():
             {"ThingID": 3, "Code": 3, "Label": "c"},
         ])
 
-    info = reflection._build_table_info("dbo", thing, set(), {})
-    snapshot = ReflectedSchema(tables={info.key: info})
+    info = reflection._build_table_info(thing, pk_default_facts(thing), schema="dbo")
+    snapshot = SchemaSnapshot(tables={info.key: info})
 
     def _override_get_db():
         conn = engine.connect()

@@ -25,17 +25,26 @@ RUN npx tsc -b && npx vite build --outDir /frontend-dist --emptyOutDir
 
 # ── Stage 2: Python dependency build ──────────────────────────────────────────
 # Every dependency ships as a wheel (mssql-python bundles its own SQL Server
-# driver), so no compilers or ODBC headers are needed — pip resolve/install only.
+# driver), so no compilers or ODBC headers are needed.
+#
+# Installed with uv FROM THE LOCKFILE, not resolved from pyproject ranges: the
+# image gets exactly the versions the test suites ran against (uv export
+# --frozen fails the build if uv.lock is stale), with the lock's hashes
+# verified at install time. Resolving ranges here instead would let a new
+# upstream release — e.g. SQLAlchemy 2.1 final inside the >=2.1.0b3,<2.2 pin —
+# reach a deployed image before the lockfile (and CI) ever saw it. Dependency
+# bumps therefore always go lockfile-first. uv is also ~10% faster here, but
+# determinism is the point.
 FROM python:3.13-slim-bookworm AS pybuild
+COPY --from=ghcr.io/astral-sh/uv:0.11.26 /uv /usr/local/bin/uv
 
 WORKDIR /build
-COPY backend/pyproject.toml .
+COPY backend/pyproject.toml backend/uv.lock ./
 
-# Stub the package so pip can resolve and install all declared dependencies
-# without the full application source. The stub is discarded afterwards.
-RUN mkdir -p app && touch app/__init__.py && \
-    pip install --no-cache-dir --prefix=/install . && \
-    rm -rf app/
+# --no-emit-project: dependencies only, so no stub package is needed and the
+# layer caches until the lockfile itself changes.
+RUN uv export --frozen --no-emit-project -o requirements.txt && \
+    uv pip install --no-cache --require-hashes --prefix=/install -r requirements.txt
 
 
 # ── Stage 3: Runtime ──────────────────────────────────────────────────────────

@@ -42,17 +42,20 @@ def _serialize(snapshot) -> dict:
                 {
                     "name": c.name,
                     "kind": c.kind.name,
-                    "python_type": c.python_type.__name__ if c.python_type else None,
+                    "python_type": c.python_type.__name__,
                     "sql_type": c.sql_type,
                     "nullable": c.nullable,
                     "is_primary_key": c.is_primary_key,
                     "is_audit": c.is_audit,
                     "required_on_create": c.required_on_create,
+                    "searchable": c.searchable,
+                    "filterable": c.filterable,
+                    "read_as_text": c.read_as_text,
+                    "comment": c.comment,
                     "max_length": c.max_length,
                     "precision": c.precision,
                     "scale": c.scale,
                     "foreign_key": list(c.foreign_key) if c.foreign_key else None,
-                    "fetchable": c.fetchable,
                 }
                 for c in t.columns
             ],

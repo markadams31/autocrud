@@ -88,7 +88,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0" },
     { name = "pytest-cov", marker = "extra == 'test'", specifier = ">=5.0" },
     { name = "python-dotenv", specifier = ">=1.0" },
-    { name = "sqlalchemy", specifier = "==2.1.0b3" },
+    { name = "sqlalchemy", specifier = ">=2.1.0b3,<2.2" },
     { name = "tenacity", specifier = ">=8.0" },
     { name = "testcontainers", marker = "extra == 'test'", specifier = ">=4.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.49.0" },
