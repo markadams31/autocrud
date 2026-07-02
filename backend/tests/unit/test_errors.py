@@ -101,7 +101,8 @@ _PYODBC_CONVERT = f"[42000] {_PYODBC}Error converting data type varchar to real.
         (ProgrammingError("stmt", {}, Exception(_PYODBC_CONVERT)), ErrorCode.BAD_REQUEST),
         (OperationalError("stmt", {}, Exception("timeout")), ErrorCode.DATABASE_UNAVAILABLE),
         # An unattributed ProgrammingError means our generated SQL is malformed —
-        # a bug, so a 500 rather than a misleading 403.
+        # a bug, so a 500 rather than a misleading 403 (but see below: the DB
+        # text is still surfaced).
         (ProgrammingError("stmt", {}, Exception("syntax error near X")), ErrorCode.INTERNAL_ERROR),
         (ValueError("anything else"), ErrorCode.INTERNAL_ERROR),
     ],
@@ -136,6 +137,25 @@ def test_unavailable_keeps_the_generic_message():
     # A driver connect trace is noise to an end user; the caller logs the text.
     err = map_database_exception(OperationalError("stmt", {}, Exception("login timeout: tcp ...")))
     assert err.message == _DEFAULT_MESSAGES[ErrorCode.DATABASE_UNAVAILABLE]
+
+
+def test_unmapped_database_error_surfaces_the_message_but_stays_500():
+    # An unrecognised DB error stays a 500 (it's most likely our bug), but its
+    # text is passed through rather than hidden behind the generic message — so
+    # an unmapped fault is legible instead of an opaque "Something went wrong".
+    unmapped = f"{_MP}An unexpected server condition matching no known pattern occurred."
+    err = map_database_exception(ProgrammingError("stmt", {}, Exception(unmapped)))
+    assert err.code is ErrorCode.INTERNAL_ERROR
+    assert err.status_code == 500
+    assert "no known pattern" in err.message
+    assert err.message != _DEFAULT_MESSAGES[ErrorCode.INTERNAL_ERROR]
+
+
+def test_non_database_internal_error_keeps_the_generic_message():
+    # The generic Exception handler in main.py raises ApiError(INTERNAL_ERROR)
+    # directly (not via the mapper) for a non-DB bug — no DB text to show, so the
+    # user still gets the friendly generic message. This guards that distinction.
+    assert ApiError(ErrorCode.INTERNAL_ERROR).message == _DEFAULT_MESSAGES[ErrorCode.INTERNAL_ERROR]
 
 
 def test_message_comes_from_orig_when_present():
