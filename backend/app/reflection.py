@@ -498,6 +498,46 @@ def _foreign_key_map(conn, schemas: list[str]) -> dict[tuple[str, str, str], tup
     }
 
 
+def _check_constraints(
+    conn, schemas: list[str]
+) -> dict[tuple[str, str], dict[str, tuple[Optional[str], str]]]:
+    """
+    Reflect CHECK constraint definitions from sys.check_constraints.
+
+    SQLAlchemy's mssql dialect does NOT reflect CHECK constraints — metadata.reflect()
+    never attaches a CheckConstraint to table.constraints, and Inspector.
+    get_check_constraints() raises NotImplementedError — so the constraint text is
+    invisible through reflection. It IS available in the catalog, so it's read here
+    the same explicit-sys.* way as FK / history / computed metadata. This is what
+    lets a CHECK violation quote the actual rule (see errors.friendly_constraint_violation);
+    without it the app can only echo the constraint name.
+
+    definition is VIEW-DEFINITION-gated (the deployment grants it to the reflection
+    identity; SA/db_owner hold it inherently). Where it isn't held the column comes
+    back NULL, so those rows are filtered out and the error path degrades to naming
+    the rule rather than quoting it — never wrong, just less specific.
+
+    parent_column_id names the column for a column-level (single-column) check; a
+    table-level check reports column None and the caller recovers columns from the
+    definition text. Keyed by (schema, table) → { constraint_name: (column|None, definition) }.
+    """
+    stmt = text("""
+        SELECT s.name, t.name, cc.name,
+               COL_NAME(cc.parent_object_id, cc.parent_column_id) AS col_name,
+               cc.definition
+        FROM   sys.check_constraints cc
+        JOIN   sys.tables  t ON cc.parent_object_id = t.object_id
+        JOIN   sys.schemas s ON t.schema_id         = s.schema_id
+        WHERE  s.name IN :schemas
+          AND  cc.definition IS NOT NULL
+    """).bindparams(bindparam("schemas", expanding=True))
+
+    out: dict[tuple[str, str], dict[str, tuple[Optional[str], str]]] = {}
+    for sname, tname, cname, col_name, definition in conn.execute(stmt, {"schemas": schemas}):
+        out.setdefault((sname, tname), {})[cname] = (col_name, definition)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Pydantic model builders
 #
@@ -753,9 +793,17 @@ def _build_table_info(
     fk_map: dict[tuple[str, str, str], tuple[str, str, str]],
     computed: frozenset[tuple[str, str, str]] = frozenset(),
     defaulted: frozenset[tuple[str, str, str]] = frozenset(),
+    check_constraints: dict[str, tuple[Optional[str], str]] | None = None,
 ) -> TableInfo:
     columns = [_build_column_info(c, generated_always, fk_map, computed, defaulted) for c in table.columns]
     pk_names = {c.name for c in table.primary_key.columns}
+
+    # CHECK constraints aren't reflected by the mssql dialect (see _check_constraints),
+    # so stash the catalog-sourced definitions on the SQLAlchemy Table's own `info`
+    # dict. The error layer reads them from there at violation time (errors.py) —
+    # keeping map_database_exception(exc, sa_table) able to quote the failed rule
+    # without any new parameter threading. Keyed constraint_name → (column|None, definition).
+    table.info["check_constraints"] = check_constraints or {}
 
     # Disable SQLAlchemy's implicit RETURNING (the OUTPUT clause) for this table.
     # SQL Server rejects an OUTPUT clause on any table that has a trigger
@@ -817,6 +865,7 @@ def reflect_schemas() -> ReflectedSchema:
         history_keys = _history_table_keys(conn, DB_SCHEMAS)
         flags        = _column_flags(conn, DB_SCHEMAS)
         fk_map       = _foreign_key_map(conn, DB_SCHEMAS)
+        check_map    = _check_constraints(conn, DB_SCHEMAS)
     finally:
         conn.close()
 
@@ -840,7 +889,7 @@ def reflect_schemas() -> ReflectedSchema:
             continue
         tables[(schema, table.name)] = _build_table_info(
             schema, table, flags.generated_always, fk_map,
-            flags.computed, flags.defaulted,
+            flags.computed, flags.defaulted, check_map.get((schema, table.name), {}),
         )
 
     if skipped_no_pk:

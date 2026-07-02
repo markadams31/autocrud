@@ -241,17 +241,20 @@ def _constraint_columns(sa_table: object) -> dict[str, list[str]]:
             name = getattr(constraint, "name", None)
             if not name:
                 continue
-            cols = [col.name for col in constraint.columns]
-            # CheckConstraint reflects its expression text but not its columns,
-            # so recover them from the bracketed identifiers in the expression
-            # (e.g. "[PercentComplete]>=(0)" → PercentComplete).
-            if not cols and getattr(constraint, "sqltext", None) is not None:
-                bracketed = set(re.findall(r"\[([^\]]+)\]", str(constraint.sqltext)))
-                cols = [c for c in table_columns if c in bracketed]
-            out[str(name)] = cols
+            out[str(name)] = [col.name for col in constraint.columns]
         for index in getattr(sa_table, "indexes", ()) or ():
             if getattr(index, "unique", False) and getattr(index, "name", None):
                 out.setdefault(str(index.name), [col.name for col in index.columns])
+        # CHECK constraints aren't reflected onto the Table (mssql dialect limitation),
+        # so their columns come from the catalog data reflection parked on table.info:
+        # the parent column for a column-level check, else the bracketed identifiers in
+        # the definition text (e.g. "[EndDate]>=[StartDate]" → EndDate, StartDate).
+        for name, (col, definition) in _reflected_checks(sa_table).items():
+            if col:
+                out.setdefault(str(name), [col])
+            else:
+                bracketed = set(re.findall(r"\[([^\]]+)\]", str(definition)))
+                out.setdefault(str(name), [c for c in table_columns if c in bracketed])
     except Exception:
         pass
     return out
@@ -298,28 +301,36 @@ def _humanize_check_expression(sqltext: str) -> str:
     return re.sub(r"\s+", " ", expr).strip()
 
 
+def _reflected_checks(sa_table: object) -> dict:
+    """
+    The CHECK constraints reflection stashed on the Table's `info` dict —
+    { constraint_name: (column|None, definition) }. Empty for a table not built
+    by reflection (or before it ran). The mssql dialect doesn't reflect CHECK
+    constraints, so reflection reads them from sys.check_constraints and parks
+    them here — see reflection._check_constraints / _build_table_info.
+    """
+    try:
+        return getattr(sa_table, "info", {}).get("check_constraints", {}) or {}
+    except Exception:
+        return {}
+
+
 def _check_constraint_expressions(sa_table: object) -> dict[str, str]:
     """
     Map each named CHECK constraint on a reflected table to a human-readable form
     of its rule, so a violation can tell the user *what* rule failed, not just its
-    name. A CheckConstraint is recognised the same way _constraint_columns does it
-    — by carrying a non-None `sqltext` — to avoid importing the class.
+    name. Sourced from the catalog-reflected definitions on the Table's `info`
+    (NOT from table.constraints — the mssql dialect never reflects CHECK
+    constraints there; see _reflected_checks).
 
-    Best-effort and never raises. The expression text needs VIEW DEFINITION at
-    reflection time (the deployment grants it to the reflection identity); where it
-    wasn't held, `sqltext` is empty and the constraint is simply omitted, so the
-    caller degrades to naming the rule rather than quoting it.
+    Best-effort and never raises. Where the definition wasn't readable at reflection
+    (VIEW DEFINITION not held), the constraint isn't present, so the caller degrades
+    to naming the rule rather than quoting it.
     """
     out: dict[str, str] = {}
-    if sa_table is None:
-        return out
     try:
-        for constraint in getattr(sa_table, "constraints", ()) or ():
-            name = getattr(constraint, "name", None)
-            sqltext = getattr(constraint, "sqltext", None)
-            if not name or sqltext is None:
-                continue
-            human = _humanize_check_expression(str(sqltext))
+        for name, (_col, definition) in _reflected_checks(sa_table).items():
+            human = _humanize_check_expression(str(definition))
             if human:
                 out[str(name)] = human
     except Exception:
