@@ -164,8 +164,9 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-      # pyodbc needs the Microsoft ODBC driver present to actually connect — the
-      # same driver the runtime image installs (see Dockerfile).
+      # The ODBC driver serves only the test bootstrap: the integration conftest
+      # polls readiness and loads schema.sql through pyodbc. The app under test
+      # runs on mssql-python, which bundles its own driver.
       - name: Install Microsoft ODBC Driver 18
         run: |
           curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
@@ -176,15 +177,22 @@ jobs:
           sudo apt-get update
           sudo ACCEPT_EULA=Y apt-get install -y --no-install-recommends msodbcsql18 unixodbc-dev
       # The integration fixtures skip (rather than pull) if the image is absent,
-      # so pre-pull it here to make tier 3 actually run.
+      # so pre-pull it here to make tier 3 actually run. Must match conftest.IMAGE
+      # exactly — 2025, for the native json/vector columns in schema.sql. (The old
+      # 2022 pull left the tier silently skipping after the 2025 switch.)
       - name: Pre-pull SQL Server image
-        run: docker pull mcr.microsoft.com/mssql/server:2022-latest
+        run: docker pull mcr.microsoft.com/mssql/server:2025-latest
       - name: Install uv
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
         with:
           enable-cache: true
       - name: Run integration tier
         working-directory: backend
+        env:
+          # A skipped tier here is a green build that verified nothing (the
+          # reflection golden lives in this tier) — make environment-gate
+          # skips hard failures in CI. See tests/integration/conftest._skip.
+          CI_REQUIRE_INTEGRATION: "1"
         run: |
           uv sync --extra test
           uv run pytest -m integration

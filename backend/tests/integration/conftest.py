@@ -7,8 +7,14 @@ Everything here is gated:
   - skipped if Docker can't start the container.
 
 So a plain `pytest` run still works without Docker; these light up only when
-the environment can support them. The container is driven directly through the
-generic DockerContainer + pyodbc (no pymssql dependency for readiness).
+the environment can support them. In CI the calculus inverts: this tier is the
+project's main gate (the reflection golden lives here), so a run that silently
+skips is a green build that verified nothing. CI sets CI_REQUIRE_INTEGRATION=1,
+which turns every environment-gate skip into a hard failure — the 2022→2025
+image rename slipped through exactly this crack once.
+
+The container is driven directly through the generic DockerContainer + pyodbc
+(no pymssql dependency for readiness); the app under test runs on mssql-python.
 """
 
 import os
@@ -17,6 +23,14 @@ import subprocess
 import time
 
 import pytest
+
+
+def _skip(reason: str):
+    """Skip locally; fail in CI, where a skipped tier would be a silent no-op."""
+    if os.environ.get("CI_REQUIRE_INTEGRATION"):
+        pytest.fail(f"integration tier is required in CI but could not run: {reason}")
+    pytest.skip(reason)
+
 
 # Skip the whole tier if the optional dependency isn't present.
 pytest.importorskip("testcontainers", reason="testcontainers not installed (uv sync --extra test)")
@@ -46,7 +60,7 @@ def _odbc_driver() -> str:
     for preferred in ("ODBC Driver 18 for SQL Server", "ODBC Driver 17 for SQL Server"):
         if preferred in drivers:
             return preferred
-    pytest.skip(f"No SQL Server ODBC driver installed (have: {drivers})")
+    _skip(f"No SQL Server ODBC driver installed (have: {drivers})")
 
 
 def _odbc_dsn(
@@ -105,7 +119,7 @@ def mssql_server():
             check=True,
         )
     except Exception as e:
-        pytest.skip(f"Docker not available (is Docker running?): {e}")
+        _skip(f"Docker not available (is Docker running?): {e}")
 
     # Require the image to be present locally and skip otherwise, rather than
     # letting container.start() pull — a pull can hang on DNS instead of failing
@@ -117,7 +131,7 @@ def mssql_server():
             capture_output=True, check=True, timeout=15,
         )
     except Exception:
-        pytest.skip(f"Image not present locally — run: docker pull {IMAGE}")
+        _skip(f"Image not present locally — run: docker pull {IMAGE}")
 
     driver = _odbc_driver()
 
@@ -143,7 +157,7 @@ def mssql_server():
             container.stop()
         except Exception:
             pass
-        pytest.skip(f"SQL Server container unavailable (is Docker running?): {e}")
+        _skip(f"SQL Server container unavailable (is Docker running?): {e}")
 
     try:
         host = container.get_container_host_ip()
@@ -163,7 +177,7 @@ def mssql_server():
                 last_err = e
                 time.sleep(2)
         if conn is None:
-            pytest.skip(f"SQL Server never became reachable: {last_err}")
+            _skip(f"SQL Server never became reachable: {last_err}")
 
         with conn:
             conn.cursor().execute(
