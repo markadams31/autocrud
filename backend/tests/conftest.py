@@ -15,7 +15,6 @@ import os
 
 os.environ["DB_SERVER"] = "test.database.windows.net"
 os.environ["DB_DATABASE"] = "testdb"
-os.environ["DB_DRIVER"] = "ODBC Driver 18 for SQL Server"
 os.environ["DB_SCHEMAS"] = "dbo"
 os.environ["DB_AUDIT_COLUMNS"] = "CreatedBy,CreatedDate,ModifiedBy,ModifiedDate"
 

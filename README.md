@@ -267,7 +267,6 @@ CREATE TABLE dbo.Ref_Colour (
 | `DB_SERVER` | Yes | Azure SQL server hostname |
 | `DB_DATABASE` | Yes | Database name |
 | `DB_SCHEMAS` | Yes | Comma-separated list of schemas to reflect (e.g. `dbo` or `dbo,hr,finance`) |
-| `DB_DRIVER` | Yes | ODBC driver string (e.g. `ODBC Driver 18 for SQL Server`; `17` also works) |
 | `DB_AUDIT_COLUMNS` | No | Comma-separated, case-insensitive names of database-managed/audit columns to exclude from writes (none by default) |
 | `BULK_MAX_ROWS` | No | Max rows a single bulk operation (delete or update) may touch in one transaction — defaults to `1000` |
 | `LOG_LEVEL` | No | `DEBUG`, `INFO`, or `WARNING` — defaults to `INFO` |
@@ -312,7 +311,6 @@ proxy, not the app directly.**
 |---|---|---|
 | **[uv](https://docs.astral.sh/uv/)** | Installs and runs the backend | `uv sync` builds the venv from `pyproject.toml`; `uv run` executes in it. uv provides Python 3.13+ itself, and brings its own build frontend (no reliance on system pip). |
 | **Node.js 22** | Frontend dev server / build | |
-| **ODBC Driver 18 for SQL Server** | `pyodbc` connects through it | [Install guide](https://learn.microsoft.com/sql/connect/odbc/download-odbc-driver-for-sql-server). Driver 17 also works — set `DB_DRIVER` to match. |
 | **Azure CLI, signed in** (`az login`) | The app reflects the schema as *your* Azure identity at startup | Locally, `DefaultAzureCredential` resolves to your `az login` session. |
 | **An Azure SQL database** | The app reflects and serves a live schema | Any Azure SQL DB you can reach. (If you provisioned with the Terraform in [`infra/`](infra/), it already exists.) |
 | **An Entra security group, with your account as a member** | Data access is authorised by SQL grants to this group | Your membership lets your identity both reflect the schema and read/write data. |

@@ -24,14 +24,9 @@ RUN npx tsc -b && npx vite build --outDir /frontend-dist --emptyOutDir
 
 
 # ── Stage 2: Python dependency build ──────────────────────────────────────────
+# Every dependency ships as a wheel (mssql-python bundles its own SQL Server
+# driver), so no compilers or ODBC headers are needed — pip resolve/install only.
 FROM python:3.13-slim-bookworm AS pybuild
-
-# gcc and unixodbc-dev compile pyodbc (a C extension linked against unixODBC).
-# Neither is needed at runtime, so they stay in this throwaway stage.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    unixodbc-dev \
-    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
 COPY backend/pyproject.toml .
@@ -46,32 +41,15 @@ RUN mkdir -p app && touch app/__init__.py && \
 # ── Stage 3: Runtime ──────────────────────────────────────────────────────────
 FROM python:3.13-slim-bookworm AS runtime
 
-# Microsoft ODBC Driver 18 for SQL Server — required at runtime by pyodbc for
-# every database connection. The driver name must match DB_DRIVER in the app
-# config ("ODBC Driver 18 for SQL Server").
-#
-# The signing key is written to the keyring path referenced by `signed-by` in
-# the source list below. apt only trusts a `signed-by` repo against that exact
-# keyring (keys in /etc/apt/trusted.gpg.d are ignored for it), so the two must
-# point at the same file — otherwise apt reports the repo as unsigned.
-#
-# libgssapi-krb5-2 is named explicitly because msodbcsql18 links
-# libgssapi_krb5.so.2 (Kerberos/GSSAPI, used for Entra auth) without declaring it
-# as an apt dependency. Otherwise it arrives only as a transitive dep of curl,
-# and the `--auto-remove` below strips it — leaving the driver unloadable
-# ("Can't open lib ... file not found") even though the .so is present.
+# No database driver installation: mssql-python bundles the SQL Server driver
+# (a vendored msodbcsql-18.6 per distro) inside its wheel, replacing the
+# msodbcsql18 + unixODBC apt stack (and its signing-key/EULA ceremony) that
+# pyodbc required here previously. Two shared libraries the bundled driver
+# links but the slim base image lacks (found via ldd against the wheel's .so):
+#   libltdl7          libtool's dlopen wrapper (came with the old msodbcsql18)
+#   libgssapi-krb5-2  Kerberos/GSSAPI, used in the Entra auth path
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl gnupg2 ca-certificates \
-    && curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
-        | gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg \
-    && echo "deb [signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/debian/12/prod bookworm main" \
-        > /etc/apt/sources.list.d/mssql-release.list \
-    && apt-get update \
-    && ACCEPT_EULA=Y apt-get install -y --no-install-recommends \
-        msodbcsql18 \
-        unixodbc \
-        libgssapi-krb5-2 \
-    && apt-get purge -y --auto-remove curl gnupg2 \
+    && apt-get install -y --no-install-recommends libltdl7 libgssapi-krb5-2 \
     && rm -rf /var/lib/apt/lists/*
 
 # Python packages from the build stage — no build tools carried over.
