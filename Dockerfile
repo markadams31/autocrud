@@ -43,8 +43,11 @@ COPY backend/pyproject.toml backend/uv.lock ./
 
 # --no-emit-project: dependencies only, so no stub package is needed and the
 # layer caches until the lockfile itself changes.
+# --compile-bytecode: pre-compiles all installed packages to .pyc so the
+# runtime container skips bytecode compilation on first import — shaves
+# ~300–500 ms from cold-start, which narrows the deploy smoke-check window.
 RUN uv export --frozen --no-emit-project -o requirements.txt && \
-    uv pip install --no-cache --require-hashes --prefix=/install -r requirements.txt
+    uv pip install --no-cache --require-hashes --compile-bytecode --prefix=/install -r requirements.txt
 
 
 # ── Stage 3: Runtime ──────────────────────────────────────────────────────────

@@ -76,12 +76,17 @@ jobs:
       # attests the exact image it just built, not an ACR-side artifact after the
       # fact. The Dockerfile installs deps before source and declares
       # GIT_SHA/BUILD_TIME last, so those layers cache-hit every run.
+      #
+      # load: true is set alongside push: true (works for single-platform builds
+      # with provenance:false). This places the image in the local Docker daemon,
+      # so trivy and syft can scan from disk rather than pulling from ACR.
       - name: Build and push
         id: build
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: .
           push: true
+          load: true
           provenance: false
           sbom: false
           tags: |
@@ -108,18 +113,38 @@ jobs:
       # (unpatched base-image CVEs are reported to the Security tab but don't block
       # — you can't fix what has no patch). Runs before attestation, so a failing
       # image is never signed or deployed.
+      #
+      # Trivy binary is version-pinned and cached across runs (~40 MB, saves ~3s).
+      # The vulnerability DB (~35 MB, updated daily) is also cached; restore-keys
+      # ensures the freshest available snapshot is always used on a DB-key miss.
+      # The scan targets the local Docker daemon image (loaded by build above)
+      # rather than pulling again from ACR — saves ~15–20s per run.
+      - name: Cache Trivy binary
+        id: trivy-bin-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ./trivy
+          key: trivy-bin-0.72.0-${{ runner.os }}
       - name: Install trivy
+        if: steps.trivy-bin-cache.outputs.cache-hit != 'true'
         env:
           TRIVY_VERSION: 0.72.0
         run: |
           curl -fsSL -o trivy.tar.gz \
             "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
           tar -xzf trivy.tar.gz trivy
+      - name: Cache Trivy vulnerability DB
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/trivy/db
+          key: trivy-db-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: trivy-db-${{ runner.os }}-
       - name: Scan image (gate)
         run: >-
           ./trivy image --ignore-unfixed --severity HIGH,CRITICAL
+          --cache-dir ~/.cache/trivy
           --format sarif --output trivy.sarif --exit-code 1
-          "${{ steps.image.outputs.ref }}"
+          "${{ steps.build.outputs.imageid }}"
       - name: Upload trivy SARIF
         if: ${{ !cancelled() }}
         uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
@@ -129,10 +154,12 @@ jobs:
 
       # SBOM + signed SLSA provenance + SBOM attestation, all bound to the digest.
       # Verified before prod promote (see deploy-prod.yml).
+      # Uses the local docker daemon image via its pushed tag (loaded by build above
+      # — no second ACR pull). syft resolves named tags from local daemon first.
       - name: Generate SBOM (SPDX)
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
-          image: ${{ steps.image.outputs.ref }}
+          image: ${{ steps.reg.outputs.server }}/autocrud:${{ github.sha }}
           format: spdx-json
           output-file: sbom.spdx.json
           upload-artifact: true
