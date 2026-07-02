@@ -33,6 +33,30 @@ development task. Schema changes — new tables, new columns, altered constraint
 effect immediately after a refresh with no code change and no deployment. The people who
 own the data own the schema; the application adapts to whatever they publish.
 
+## When this isn't the right tool
+
+Auto CRUD is a thin read/write layer over the live schema, which makes it the wrong choice
+for a few scenarios:
+
+- **Custom business logic.** The API does not run code around writes. If an insert needs to
+  call an external service, compute a derived value in Python, or orchestrate a multi-step
+  workflow, you need a dedicated endpoint — not a generic CRUD layer.
+- **Complex queries.** The query endpoint serves one table at a time. Multi-table joins,
+  aggregations, and reporting queries belong in a database view, a reporting tool, or a
+  purpose-built API. (Views themselves are not served; only tables.)
+- **Versioned external API contracts.** The API shape is derived directly from the live
+  schema. A schema change is an immediate API change. Third-party consumers that depend on
+  a stable, versioned contract need a different layer in front.
+- **Non-Azure-SQL databases.** Authentication is built around Entra OBO tokens and Azure SQL's
+  managed-identity support. It won't work against Postgres, MySQL, or on-premises SQL Server
+  without equivalent Entra token infrastructure.
+- **Tables without a primary key.** Tables with no primary key are skipped at reflection time
+  (rows can't be addressed individually). Add a surrogate key, or accept that those tables
+  won't appear in the API.
+- **Binary or file handling.** Binary columns are surfaced read-only. If a workflow involves
+  uploading or downloading files, use Azure Blob Storage with a dedicated endpoint; the
+  generic CRUD layer won't help there.
+
 ## How it works
 
 On startup, the app reflects the live schema from Azure SQL and builds two Pydantic
@@ -152,6 +176,39 @@ Azure App Service
     └── Authorization via SQL grants and Entra security groups
 ```
 
+The sequence diagram below shows the two identities and how a request flows at runtime:
+
+```mermaid
+sequenceDiagram
+    actor User as Signed-in user
+    participant EasyAuth
+    participant FastAPI
+    participant SQL as Azure SQL
+
+    Note over FastAPI,SQL: Startup (and POST /admin/refresh)
+    FastAPI->>SQL: connect as managed identity (VIEW DEFINITION only)
+    SQL-->>FastAPI: column / FK / default metadata from sys.*
+    Note over FastAPI: SchemaSnapshot built — Pydantic models generated per table
+
+    Note over User,SQL: Runtime data request
+    User->>EasyAuth: sign in (Microsoft Entra OIDC)
+    EasyAuth-->>User: session established
+
+    User->>EasyAuth: POST /api/dbo/Projects/query
+    EasyAuth->>FastAPI: forward + inject identity header + Azure SQL OBO token
+    FastAPI->>SQL: SELECT … (OBO token — SQL Server enforces the user's own grants)
+    SQL-->>FastAPI: rows
+    FastAPI-->>User: {"data": […], "total": …, "pages": …}
+
+    Note over User,FastAPI: Token expiry and silent refresh
+    User->>EasyAuth: next request (token expired)
+    FastAPI-->>User: 401 UNAUTHENTICATED (raised before any DB work)
+    User->>EasyAuth: GET /.auth/refresh
+    EasyAuth-->>User: fresh token
+    User->>FastAPI: replay original request (safe — first attempt never ran)
+    FastAPI-->>User: response
+```
+
 ## Authentication and authorisation
 
 The app uses two distinct identities for two distinct purposes.
@@ -207,12 +264,22 @@ the application. This keeps audit logic consistent across every tool that touche
 not just this API.
 
 **Excluded** — a small set of types that aren't safely writable through a generic layer:
-binary / `rowversion`, `XML`, `sql_variant`, and `vector`. Binary and XML are surfaced
-read-only in metadata; `sql_variant` is omitted entirely (no fixed shape). A `vector`
-(Azure SQL / SQL Server 2025) column holds a machine-generated embedding that a client
-can't meaningfully hand-edit, so it too is read-only. The mssql dialect doesn't yet ship a
-vector type, so the app registers one for reflection (`app/mssql_types.py`) — the column
-then reflects as a real type and is excluded by type like the rest, rather than special-cased.
+binary / `rowversion`, `XML`, `sql_variant`, `vector`, and the CLR spatial types
+(`geometry`, `geography`). All are surfaced read-only in metadata. `sql_variant` and the
+spatial types are cast to text on reads (`CAST … AS NVARCHAR`) so the API returns
+something useful rather than raw CLR bytes — WKT strings for geometry/geography, the value
+as text for sql_variant. A `vector` column holds a machine-generated embedding that a
+client can't meaningfully hand-edit, so it is read-only and not cast. The mssql dialect
+doesn't ship these types natively, so the app registers them for reflection
+(`app/mssql_types.py`) — they then reflect as real named types and are classified by the
+same `isinstance` machinery as the built-ins, rather than special-cased.
+
+`hierarchyid` (a tree-path string like `/1/2/3/`) is the exception: it stays **editable**
+because the path round-trips as plain text; reads cast the CLR bytes back to the path
+string automatically.
+
+The SQL Server 2025 native `json` type is also editable — surfaced as a string rather than
+a Python `dict` so top-level JSON arrays and scalars round-trip correctly.
 
 Temporal history tables are excluded from the API entirely (detected via `sys.tables`,
 `temporal_type = 1`). Tables without a primary key are also excluded.
@@ -269,6 +336,7 @@ CREATE TABLE dbo.Ref_Colour (
 | `DB_SCHEMAS` | Yes | Comma-separated list of schemas to reflect (e.g. `dbo` or `dbo,hr,finance`) |
 | `DB_AUDIT_COLUMNS` | No | Comma-separated, case-insensitive names of database-managed/audit columns to exclude from writes (none by default) |
 | `BULK_MAX_ROWS` | No | Max rows a single bulk operation (delete or update) may touch in one transaction — defaults to `1000` |
+| `HEALTH_CHECK_DATABASE` | No | When `true` (default), `/health` performs a live database round-trip (full readiness check). Set to `false` for serverless databases with auto-pause: the health probe fires every ~60 seconds and a database round-trip would keep the instance awake and consume compute allowance. `false` makes `/health` a pure liveness check (snapshot loaded) so the database can actually pause. |
 | `LOG_LEVEL` | No | `DEBUG`, `INFO`, or `WARNING` — defaults to `INFO` |
 | `LOG_USER_IDENTITY` | No | How the signed-in user appears in logs: `email` (default), `hash` (a stable pseudonym, no PII), or `none` |
 | `LOG_USER_IDENTITY_SALT` | No | Salt for `hash` mode, to resist reversing known addresses (empty by default) |
