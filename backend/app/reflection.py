@@ -72,20 +72,27 @@ TIMESTAMP/rowversion columns are also server-generated — SQL Server will
 reject writes at the engine level, so excluding them prevents a confusing
 runtime error.
 
-HIERARCHYID falls back to str and lands as EDITABLE — this SQLAlchemy
-version's mssql dialect doesn't export a HIERARCHYID type to check
-against. If your schema uses it, add it to _EXCLUDED_WRITE_TYPES once
-a newer SQLAlchemy version exports the type.
+Types the mssql dialect doesn't model
+-------------------------------------
+The installed dialect only knows the types in its ischema_names table. Anything
+outside it — SQL Server 2025's json and vector, plus the CLR types
+geography/geometry/hierarchyid — would otherwise reflect as a nameless NullType
+(str(col.type) == "NULL", warned, un-isinstance-able). app.mssql_types registers
+each of them so reflection produces a real, named type that flows through the
+same isinstance/str machinery as every built-in. Their treatment then splits on
+two independent axes:
 
-VECTOR (Azure SQL / SQL Server 2025) is likewise not a built-in the mssql
-dialect knows, so it would reflect as an unrecognised type (NullType) and land
-as an EDITABLE text field over a raw embedding — which a client can't
-meaningfully hand-edit and a write would corrupt. Rather than special-case it,
-app.mssql_types registers a VECTOR type in the dialect's reflection map, so it
-reflects as a real type and is then EXCLUDED here by isinstance like binary/XML.
-Unlike HIERARCHYID (still NullType→EDITABLE until the dialect exports it), VECTOR
-is handled today via that one-line registration. Embeddings are machine-
-generated; surfacing them read-only is the correct generic behaviour.
+  Writable?    json and hierarchyid are plain strings that round-trip, so they
+               stay EDITABLE. vector/geometry/geography are structured-but-opaque
+               (a raw embedding or spatial value a client can't hand-edit), so
+               they join _EXCLUDED_WRITE_TYPES alongside binary/XML.
+  Fetchable?   The CLR types (hierarchyid/geometry/geography) can't be read back
+               by pyodbc in a result row (ODBC type -151), so they are flagged
+               _UNFETCHABLE_TYPES and ColumnInfo.fetchable=False; the read path
+               CASTs them to text — WKT for spatial, the path string for
+               hierarchyid (see routes/crud._read_columns). sql_variant (-16) is
+               the same: excluded from writes AND unfetchable. json and vector
+               fetch fine (vector comes back as a JSON-array string).
 
 Decimal handling
 -----------------
@@ -115,10 +122,11 @@ from sqlalchemy.dialects.mssql import (
 
 from app.config import DB_SCHEMAS, DB_AUDIT_COLUMNS
 from app.connection import reflection_engine, _connect_with_retry
-# Importing this registers VECTOR (and any future types) into the mssql dialect's
-# reflection map, so metadata.reflect() below produces a typed VECTOR column
-# instead of NullType — and VECTOR then classifies like any other excluded type.
-from app.mssql_types import VECTOR
+# Importing this registers VECTOR/GEOMETRY/GEOGRAPHY/HIERARCHYID/JSON into the
+# mssql dialect's reflection map, so metadata.reflect() below produces real typed
+# columns instead of NullType — and each then classifies by isinstance like any
+# other built-in. See app.mssql_types for why registration beats a catalog read.
+from app.mssql_types import VECTOR, GEOMETRY, GEOGRAPHY, HIERARCHYID
 
 logger = logging.getLogger(__name__)
 
@@ -150,13 +158,21 @@ _DB_GENERATING_FUNCTIONS = {
 # Types excluded from write payloads. Surfaced read-only in metadata as str
 # where representable; sql_variant omitted entirely (no fixed shape).
 _EXCLUDED_WRITE_TYPES = (
-    VARBINARY, BINARY, IMAGE, TIMESTAMP,  # binary / rowversion
-    XML,                                   # structured-but-opaque
-    SQL_VARIANT,                           # no fixed shape
-    VECTOR,                                # machine-generated embedding (read-only)
+    VARBINARY, BINARY, IMAGE, TIMESTAMP,   # binary / rowversion
+    XML,                                    # structured-but-opaque
+    SQL_VARIANT,                            # no fixed shape
+    VECTOR, GEOMETRY, GEOGRAPHY,            # machine-generated / spatial (read-only); registered in app.mssql_types
 )
 
 _UNREPRESENTABLE_TYPES = (SQL_VARIANT,)
+
+# Types the pyodbc driver cannot materialise in a result row: the CLR UDTs
+# (hierarchyid/geometry/geography → ODBC type -151) and sql_variant (-16). A plain
+# SELECT of such a column raises "ODBC SQL type -151/-16 is not yet supported" and
+# fails the whole read, so ColumnInfo.fetchable flags them for the read path to
+# CAST to NVARCHAR (see routes/crud._read_columns). The CLR types are recognised
+# via app.mssql_types; json and vector fetch fine and are deliberately absent.
+_UNFETCHABLE_TYPES = (HIERARCHYID, GEOMETRY, GEOGRAPHY, SQL_VARIANT)
 
 
 def _server_default_generates_value(col: Column) -> bool:
@@ -307,6 +323,7 @@ class ColumnInfo:
     precision: Optional[int]
     scale: Optional[int]
     foreign_key: Optional[tuple[str, str, str]]  # (schema, table, column) or None
+    fetchable: bool = True        # False = pyodbc can't SELECT it; read path CASTs to text (see _UNFETCHABLE_TYPES)
 
     @property
     def is_editable(self) -> bool:
@@ -772,8 +789,9 @@ def _build_column_info(
         name=col.name,
         kind=kind,
         python_type=_python_type(col),
-        # str(col.type) is correct for VECTOR too: it reflects as a real VECTOR type
-        # now (registered in app.mssql_types), so this reads "VECTOR", not "NULL".
+        # str(col.type) is correct for the app.mssql_types types too: they reflect
+        # as real named types now, so this reads "VECTOR"/"JSON"/"GEOGRAPHY"/…,
+        # not "NULL".
         sql_type=str(col.type),
         nullable=bool(col.nullable),
         is_primary_key=col.primary_key,
@@ -783,6 +801,7 @@ def _build_column_info(
         precision=getattr(col.type, "precision", None),
         scale=getattr(col.type, "scale", None),
         foreign_key=fk,
+        fetchable=not isinstance(col.type, _UNFETCHABLE_TYPES),
     )
 
 

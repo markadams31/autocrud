@@ -27,7 +27,9 @@ from testcontainers.core.wait_strategies import LogMessageWaitStrategy  # noqa: 
 from sqlalchemy import create_engine  # noqa: E402
 
 SA_PASSWORD = "Str0ng_Passw0rd!"
-IMAGE = "mcr.microsoft.com/mssql/server:2022-latest"
+# SQL Server 2025: the schema fixture exercises the native json and vector types
+# introduced there (see schema.sql), which earlier images reject at CREATE TABLE.
+IMAGE = "mcr.microsoft.com/mssql/server:2025-latest"
 TEST_DB = "autocrud_test"
 SCHEMA_SQL = os.path.join(os.path.dirname(__file__), "schema.sql")
 
@@ -86,7 +88,7 @@ def mssql_engine():
     # Require the image to be present locally and skip otherwise, rather than
     # letting container.start() pull — a pull can hang on DNS instead of failing
     # fast, which would stall the whole suite. One-time prerequisite:
-    #   docker pull mcr.microsoft.com/mssql/server:2022-latest
+    #   docker pull mcr.microsoft.com/mssql/server:2025-latest
     try:
         subprocess.run(
             ["docker", "image", "inspect", IMAGE],

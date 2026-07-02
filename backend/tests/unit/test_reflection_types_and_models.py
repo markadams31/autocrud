@@ -15,6 +15,7 @@ from sqlalchemy.dialects.mssql import (
     VARCHAR,
 )
 
+from app.mssql_types import GEOGRAPHY, HIERARCHYID, JSON, VECTOR
 from app.reflection import (
     ColumnKind,
     _build_column_info,
@@ -58,6 +59,35 @@ def test_python_type_mapping(sa_type, expected):
 def test_sql_variant_has_no_python_type():
     # Unrepresentable — surfaces as None so it can be omitted entirely.
     assert _python_type(make_column("V", SQL_VARIANT())) is None
+
+
+# ── fetchable + display for the app.mssql_types registered types ─────────────
+# These reflect as real named types (see test_mssql_types), so _build_column_info
+# reads them by isinstance — no catalog read. fetchable is False for the CLR types
+# pyodbc can't materialise (see reflection._UNFETCHABLE_TYPES).
+
+def test_build_column_info_flags_unfetchable_clr_types():
+    for sa_type, kind in ((GEOGRAPHY(), ColumnKind.EXCLUDED), (HIERARCHYID(), ColumnKind.EDITABLE)):
+        info = _build_column_info(make_column("C", sa_type), set(), {})
+        assert info.fetchable is False
+        assert info.kind is kind
+        assert info.sql_type == str(sa_type)   # e.g. "GEOGRAPHY" / "HIERARCHYID"
+
+
+def test_build_column_info_json_is_fetchable_editable():
+    info = _build_column_info(make_column("Doc", JSON()), set(), {})
+    assert info.fetchable is True
+    assert info.kind is ColumnKind.EDITABLE
+    assert info.sql_type == "JSON"
+
+
+def test_build_column_info_vector_excluded_but_fetchable():
+    # A vector reads back fine (as a JSON-array string), so it's fetchable; it's
+    # only kept out of writes.
+    info = _build_column_info(make_column("V", VECTOR()), set(), {})
+    assert info.fetchable is True
+    assert info.kind is ColumnKind.EXCLUDED
+    assert info.sql_type == "VECTOR"
 
 
 # ── required-on-create ───────────────────────────────────────────────────────

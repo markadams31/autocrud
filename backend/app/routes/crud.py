@@ -61,7 +61,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, Request, status
 from pydantic import BaseModel, ValidationError
-from sqlalchemy import and_, func, insert, delete, select, update, or_
+from sqlalchemy import NVARCHAR, and_, cast, func, insert, delete, select, update, or_
 from sqlalchemy.engine import Connection
 
 from app.auth_headers import CLIENT_PRINCIPAL_NAME
@@ -582,6 +582,26 @@ def _scrub_update_payload(table: TableInfo, body: dict) -> dict:
     }
 
 
+def _read_columns(table: TableInfo) -> list:
+    """
+    The column expressions to SELECT for a full-row read.
+
+    Most columns are selected as-is. A column the pyodbc driver cannot materialise
+    in a result row — a SQL Server CLR UDT (hierarchyid/geometry/geography, ODBC
+    type -151) or sql_variant (-16), flagged ColumnInfo.fetchable=False at
+    reflection — is CAST to NVARCHAR(MAX) and re-labelled with its own name. A
+    plain SELECT of such a column raises "ODBC SQL type -151/-16 is not yet
+    supported" and fails the whole read (and, via the post-write re-fetch, blocks
+    create/update too); the CAST returns the value as text instead — WKT for
+    spatial types, the path string for hierarchyid — so the row is readable.
+    """
+    t = table.sa_table
+    return [
+        t.c[c.name] if c.fetchable else cast(t.c[c.name], NVARCHAR()).label(c.name)
+        for c in table.columns
+    ]
+
+
 def _row_to_dict(row) -> dict:
     """
     Convert a result row to a plain dict, hex-encoding any binary values.
@@ -603,8 +623,7 @@ def _fetch_row(table: TableInfo, pk_str: str, db: Connection) -> dict:
     Fetch and return one row by primary key as a plain dict.
     Raises 404 ApiError if not found.
     """
-    t   = table.sa_table
-    row = _execute(db, select(t).where(_pk_filter(table, pk_str))).fetchone()
+    row = _execute(db, select(*_read_columns(table)).where(_pk_filter(table, pk_str))).fetchone()
     if row is None:
         raise ApiError(
             ErrorCode.NOT_FOUND,
@@ -721,7 +740,7 @@ def query_rows(
     key for stable pagination.
     """
     t          = table.sa_table
-    stmt       = select(t)
+    stmt       = select(*_read_columns(table))
     count_stmt = select(func.count()).select_from(t)
 
     # Search (LIKE across text columns) + per-column operator filters. Shared
