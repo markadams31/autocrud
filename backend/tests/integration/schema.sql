@@ -13,6 +13,12 @@
 --   - FKs: single, two to the same table, self-referential, nullable, cross-schema
 --   - temporal system-versioning (history table excluded; GENERATED ALWAYS cols)
 --   - multiple schemas (dbo + app2)
+--   - a schema OUTSIDE the configured set, FK-referenced from dbo (must never
+--     be pulled into the snapshot)
+--   - legacy text/ntext (whose reflected "length" is the 16-byte LOB pointer,
+--     not a real limit), an alias UDT, and a sequence-fed default
+--   - a least-privilege login (VIEW DEFINITION only, no data access) that the
+--     reflection matrix re-runs under — see conftest.vdonly_engine
 -- Loaded into a fresh database, so no DROP statements are needed.
 -- ============================================================================
 
@@ -288,7 +294,82 @@ CREATE TABLE dbo.Checked (
 );
 GO
 
+-- ── Schema OUTSIDE the configured set (DB_SCHEMAS = dbo, app2) ───────────────
+-- dbo.EdgeRef references outside.Target. metadata.reflect(resolve_fks=True)
+-- would recursively pull outside.Target into the snapshot — where it would be
+-- misclassified, because the sys.* flag queries filter to the configured
+-- schemas. Reflection must keep the FK metadata on EdgeRef.TargetID while
+-- excluding outside.Target itself. The computed + defaulted columns exist so
+-- a leak would also be visibly misclassified, not just present.
+CREATE SCHEMA outside;
+GO
+CREATE TABLE outside.Target (
+    TargetID    INT           IDENTITY(1,1) NOT NULL CONSTRAINT PK_OutsideTarget PRIMARY KEY,
+    Name        NVARCHAR(50)  NOT NULL,
+    ComputedCol AS (UPPER(Name)),
+    StampedAt   DATETIME2     NOT NULL CONSTRAINT DF_OutsideTarget_Stamp DEFAULT SYSUTCDATETIME()
+);
+GO
+CREATE TABLE dbo.EdgeRef (
+    EdgeRefID INT          IDENTITY(1,1) NOT NULL CONSTRAINT PK_EdgeRef PRIMARY KEY,
+    TargetID  INT          NOT NULL CONSTRAINT FK_EdgeRef_Target REFERENCES outside.Target (TargetID),
+    Note      NVARCHAR(50) NULL
+);
+GO
+
+-- ── Legacy text/ntext, alias UDT, sequence default ───────────────────────────
+-- text reflects sys.columns.max_length = 16 (the LOB pointer size) and ntext 8
+-- (after the nchar halving) — neither is a real limit, so reflection must not
+-- surface them as max_length or the generated models reject valid input.
+-- The alias UDT reflects via the dialect's base-type fallback (VARCHAR(20));
+-- its sys.types row is a securable, so visibility depends on the reflection
+-- identity holding VIEW DEFINITION. The sequence default is a plain
+-- (overridable) default: EDITABLE and not required, but not DB-owned.
+CREATE TYPE dbo.PhoneNumber FROM VARCHAR(20);
+GO
+CREATE SEQUENCE dbo.LegacySeq AS INT START WITH 100;
+GO
+CREATE TABLE dbo.Legacy (
+    LegacyID   INT             IDENTITY(1,1) NOT NULL CONSTRAINT PK_Legacy PRIMARY KEY,
+    ColText    TEXT            NULL,
+    ColNText   NTEXT           NULL,
+    ColUdt     dbo.PhoneNumber NULL,
+    ColSeq     INT             NOT NULL CONSTRAINT DF_Legacy_Seq DEFAULT (NEXT VALUE FOR dbo.LegacySeq),
+    Label      NVARCHAR(50)    NOT NULL
+);
+GO
+EXEC sys.sp_addextendedproperty
+    @name = N'MS_Description', @value = N'Free-text label shown to operators',
+    @level0type = N'SCHEMA', @level0name = N'dbo',
+    @level1type = N'TABLE',  @level1name = N'Legacy',
+    @level2type = N'COLUMN', @level2name = N'Label';
+GO
+
+-- ── Manual single-column INTEGER primary key ─────────────────────────────────
+-- Distinct from ManualKey (nvarchar): reflected mssql columns carry
+-- autoincrement=True/False (never "auto"), so a manual int PK must stay in the
+-- create model and be required — hand-built Tables of the same shape behave
+-- differently, which is exactly why this is pinned against a real database.
+CREATE TABLE dbo.ManualIntKey (
+    IntCode INT           NOT NULL CONSTRAINT PK_ManualIntKey PRIMARY KEY,
+    Label   NVARCHAR(100) NOT NULL
+);
+GO
+
+-- ── Least-privilege reflection identity ──────────────────────────────────────
+-- VIEW DEFINITION only — no db_datareader, no data access. Validated (Phase 0,
+-- SQL Server 2025) to reflect with full parity to sa: catalog rows, gated
+-- definition columns, FKs, CHECK texts, comments, and alias-UDT visibility all
+-- come from VIEW DEFINITION; row access is never needed by reflection.
+CREATE LOGIN reflect_vdonly WITH PASSWORD = 'Int3gration_VD!only', CHECK_POLICY = OFF;
+GO
+CREATE USER reflect_vdonly FOR LOGIN reflect_vdonly;
+GO
+GRANT VIEW DEFINITION TO reflect_vdonly;
+GO
+
 -- Seed the FK targets so CRUD round-trip tests have something to reference.
 INSERT INTO dbo.Category (CategoryCode, CategoryName) VALUES (N'ENG', N'Engineering');
 INSERT INTO dbo.Employee (FullName) VALUES (N'Alice Manager'), (N'Bob Sponsor');
+INSERT INTO outside.Target (Name) VALUES (N'edge-target');
 GO

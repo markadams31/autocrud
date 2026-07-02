@@ -90,6 +90,22 @@ def test_build_column_info_vector_excluded_but_fetchable():
     assert info.sql_type == "VECTOR"
 
 
+# ── max_length: real limits pass through, LOB pointer sizes do not ───────────
+
+def test_text_ntext_lob_pointer_is_not_a_max_length():
+    # Reflection reports TEXT(16)/NTEXT(8) — sys.columns.max_length is the
+    # 16-byte LOB pointer (halved for ntext), not a character limit. Surfacing
+    # it would put Field(max_length=16/8) on the models and reject valid input.
+    for sa_type in (TEXT(16), NTEXT(8)):
+        info = _build_column_info(make_column("C", sa_type), set(), {})
+        assert info.max_length is None, f"{type(sa_type).__name__} leaked a LOB pointer as max_length"
+
+
+def test_varchar_length_still_surfaces_as_max_length():
+    info = _build_column_info(make_column("C", NVARCHAR(50)), set(), {})
+    assert info.max_length == 50
+
+
 # ── required-on-create ───────────────────────────────────────────────────────
 
 def test_not_null_no_default_is_required():

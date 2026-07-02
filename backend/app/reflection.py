@@ -46,28 +46,33 @@ If a table's audit columns aren't wired to a stored procedure or trigger,
 they'll stay NULL silently. That's an operational concern, not something
 schema introspection can detect.
 
-A note on reflection vs. privilege. SQLAlchemy derives a column's computed and
-default status from object DEFINITION text, which SQL Server hides unless the
-caller holds GRANT VIEW DEFINITION. A reflection identity that does not hold it
-sees col.computed and col.server_default come back empty, so those columns would
-be silently misclassified. The
-classification therefore reads the underlying flags straight from sys.columns
-(is_computed, generated_always_type, default_object_id — see _column_flags),
-which are visible with only table access. This mirrors the FK / history /
-period-column queries, which already bypass reflection for the same reason. One
-distinction can't be made from sys.columns alone: the default's *text* is gated
-too, so a value-generating default (newid()) can't be told from a constant one —
-enough to keep such a column from being marked required, but not enough to mark
-it DB-owned (it stays editable). The Terraform deployment grants the reflection
-identity VIEW DEFINITION to close that last gap (see infra/.../sql.tf); the
-structural reads here are the safety net that keeps classification correct even
-on a database where it has not been granted.
+A note on reflection vs. privilege. The reflection identity needs exactly one
+grant: GRANT VIEW DEFINITION (database scope). It does NOT need db_datareader —
+reflection reads metadata, never rows — and a VIEW-DEFINITION-only identity
+reflects with full parity to sysadmin (validated live against SQL Server 2025;
+the integration matrix re-runs under such a login). VIEW DEFINITION is
+load-bearing in two ways: SQL Server NULLs the DEFINITION text columns
+(sys.computed_columns / sys.default_constraints / sys.check_constraints
+.definition) without it, so col.computed and col.server_default reflect empty;
+and an alias UDT's sys.types row is a securable of its own, so without VIEW
+DEFINITION columns of that type silently vanish from reflection entirely. For
+an identity that nonetheless lacks the grant, classification stays correct-but-
+degraded: the underlying flags are read straight from sys.columns (is_computed,
+generated_always_type, default_object_id — see _column_flags), which are
+visible with any object permission. The one distinction sys.columns can't make
+is the default's *text* — a value-generating default (newid()) can't be told
+from a constant one — enough to keep such a column from being marked required,
+but not enough to mark it DB-owned (it stays editable). The Terraform
+deployment grants the reflection identity VIEW DEFINITION (see
+infra/.../sql.tf); the structural reads here are the safety net for a database
+where it has not been granted.
 
 Excluded types
 ---------------
 Binary (VARBINARY, BINARY, IMAGE), rowversion/TIMESTAMP, XML, and
-sql_variant are excluded from write payloads. Binary and XML are surfaced
-read-only in metadata; sql_variant is omitted entirely (no fixed shape).
+sql_variant are excluded from write payloads. All are surfaced read-only in
+metadata; sql_variant additionally has no fixed shape (python_type None) and
+cannot be fetched raw, so reads CAST it to text like the CLR types.
 TIMESTAMP/rowversion columns are also server-generated — SQL Server will
 reject writes at the engine level, so excluding them prevents a confusing
 runtime error.
@@ -205,7 +210,7 @@ def _is_db_owned(
     sys.columns flags gathered in reflect_schemas() (the `computed` and
     `generated_always` triple sets), NOT from SQLAlchemy's col.computed — because
     col.computed is derived from VIEW-DEFINITION-gated definition text and comes
-    back empty under the least-privilege reflection identity. col.computed and a
+    back empty under an identity lacking VIEW DEFINITION. col.computed and a
     value-generating server_default are kept only as a redundant signal that
     fires when VIEW DEFINITION happens to be held. Does NOT detect trigger- or
     procedure-managed columns — those are caught by DB_AUDIT_COLUMNS in _classify.
@@ -299,6 +304,20 @@ def _python_type(col: Column) -> Optional[type]:
             return py_type
     logger.debug("No type mapping for %s (%r); defaulting to str", col.name, col.type)
     return str
+
+
+def _reflected_max_length(col: Column) -> Optional[int]:
+    """
+    The column's usable character limit, or None where there isn't one.
+
+    Legacy TEXT/NTEXT need the exception: sys.columns.max_length for a LOB
+    pointer is 16 bytes, so the dialect reflects TEXT(16) and NTEXT(8) (after
+    the nchar halving). Neither is a real limit — passing it through would put
+    Field(max_length=16/8) on the generated models and reject valid input.
+    """
+    if isinstance(col.type, (TEXT, NTEXT)):
+        return None
+    return getattr(col.type, "length", None)
 
 
 # ---------------------------------------------------------------------------
@@ -416,8 +435,8 @@ class _ColumnFlags:
     These exist because SQLAlchemy derives the same facts from object DEFINITION
     text — sys.computed_columns.definition for computed columns, the default
     constraint's definition for defaults — and that text is hidden without GRANT
-    VIEW DEFINITION. Under the least-privilege reflection identity (a plain
-    db_datareader), col.computed and col.server_default therefore come back empty
+    VIEW DEFINITION. Under an identity lacking that grant, col.computed and
+    col.server_default therefore come back empty
     and the columns get misclassified: a computed column that SQL Server will
     reject on write looks editable, and a NOT NULL column with a default looks
     required. The flags read here — is_computed, generated_always_type,
@@ -477,12 +496,13 @@ def _foreign_key_map(conn, schemas: list[str]) -> dict[tuple[str, str, str], tup
     """
     Build the FK column map by querying sys.foreign_key_columns directly.
 
-    Read from the system catalog using the same managed identity that reflects
-    the tables, so it needs no permission beyond the metadata visibility the
-    identity already has on those tables — in particular it does NOT require
-    GRANT VIEW DEFINITION, which SQLAlchemy's own FK reflection would. This is
-    the same explicit-sys.* approach used for history tables and GENERATED
-    ALWAYS columns, so all reflected metadata comes from one consistent source.
+    Not a privilege workaround: SQLAlchemy's own FK reflection (INFORMATION_
+    SCHEMA.REFERENTIAL_CONSTRAINTS) works at every privilege level, VIEW
+    DEFINITION or not — verified live. This query exists because it is one
+    set-based read for every configured schema (reflection's is one query per
+    table), it yields exactly the (schema, table, column) keying the snapshot
+    uses, and it keeps all reflected metadata on the same explicit-sys.*
+    source as the history / flag / CHECK queries.
 
     Only foreign keys whose REFERENCING column lives in a configured schema
     are returned (matching how tables are reflected). The referenced table may
@@ -578,7 +598,7 @@ def _is_auto_generated_pk(
 
     A single-column PK that merely *has* a default constraint (in `defaulted`,
     read structurally from sys.columns) is treated as auto-generated too: under
-    the least-privilege reflection identity the default's text is hidden, so a
+    an identity lacking VIEW DEFINITION the default's text is hidden, so a
     NEWID()/sequence default can't be confirmed via _server_default_generates_value
     — but a default on a lone PK means the database can supply it. The same
     pk_column_count==1 guard keeps this from touching composite PKs.
@@ -608,7 +628,7 @@ def _is_required_on_create(
 
     "Has a server default" is decided structurally via `defaulted` (sys.columns
     default_object_id), not col.server_default: the latter is reflected from
-    VIEW-DEFINITION-gated text and is empty under the least-privilege identity,
+    VIEW-DEFINITION-gated text and is empty without that grant,
     which would otherwise mark a NOT NULL defaulted column (e.g. IsActive DEFAULT 1,
     or a NEWID() column) as required and force the client to invent a value the
     database was meant to supply. col.server_default stays in the check as a
@@ -797,7 +817,7 @@ def _build_column_info(
         is_primary_key=col.primary_key,
         is_audit=is_audit,
         required_on_create=_is_required_on_create(col, kind, pk_column_count, defaulted),
-        max_length=getattr(col.type, "length", None),
+        max_length=_reflected_max_length(col),
         precision=getattr(col.type, "precision", None),
         scale=getattr(col.type, "scale", None),
         foreign_key=fk,
@@ -880,7 +900,14 @@ def reflect_schemas() -> ReflectedSchema:
     conn = _connect_with_retry(reflection_engine)
     try:
         for schema in DB_SCHEMAS:
-            metadata.reflect(bind=conn, schema=schema)
+            # resolve_fks=False: with the default (True), SQLAlchemy recursively
+            # reflects every FK-referenced table into this MetaData — including
+            # tables in schemas NOT in DB_SCHEMAS, which would then surface in
+            # the snapshot misclassified (the sys.* flag/FK/CHECK queries below
+            # filter to the configured schemas). FK *metadata* on the reflected
+            # columns is unaffected, and this app never resolves SQLAlchemy-level
+            # FK targets — cross-table links come from _foreign_key_map.
+            metadata.reflect(bind=conn, schema=schema, resolve_fks=False)
         history_keys = _history_table_keys(conn, DB_SCHEMAS)
         flags        = _column_flags(conn, DB_SCHEMAS)
         fk_map       = _foreign_key_map(conn, DB_SCHEMAS)
@@ -896,10 +923,13 @@ def reflect_schemas() -> ReflectedSchema:
 
     for table in metadata.tables.values():
         schema = table.schema
-        if schema is None:
-            # Tables are reflected per explicit schema (metadata.reflect(schema=…)),
-            # so schema is always set — this guard just makes that provable to the
-            # type checker for the keys and calls below.
+        if schema is None or schema not in DB_SCHEMAS:
+            # schema is always set (tables are reflected per explicit schema), so
+            # the None arm just makes that provable to the type checker. The
+            # DB_SCHEMAS arm is belt-and-braces with resolve_fks=False above:
+            # only configured schemas may enter the snapshot — a table from any
+            # other schema would carry empty flag/FK/CHECK metadata and
+            # misclassify its columns.
             continue
         if (schema, table.name) in history_keys:
             continue
