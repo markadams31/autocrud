@@ -61,10 +61,12 @@ between environments is structurally prevented, not just by convention.
 ## Key decisions
 
 **Docker container over zip deploy**
-The backend depends on `pyodbc`, which requires the Microsoft ODBC Driver for
-SQL Server to be installed on the host OS. Zip deploy relies on an App Service
-startup script to install it, which is fragile and slow. Docker bakes the driver
-into the image at build time — the runtime environment is fixed and reproducible.
+The application's SQL Server driver (mssql-python) is a compiled native binary
+that must match the runtime OS. The multi-stage `Dockerfile` builds the frontend
+and backend together in a known, pinned environment and bakes both into a single
+image — so what passed CI is exactly what runs on App Service. Zip deploy would
+require a startup script to install the compiled driver and build the frontend on
+the host, which is fragile and slows cold starts.
 
 **Entra-only SQL authentication**
 No SQL admin password is created, stored, or rotated. The SQL Server is
