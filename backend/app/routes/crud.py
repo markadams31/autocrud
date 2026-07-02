@@ -170,6 +170,15 @@ _LIKE_PATTERNS = {
     "endswith":   lambda v: f"%{v}",
 }
 
+# Every filter operator the API understands. An `op` outside this set is a client
+# mistake — most dangerously a one-character typo like "starts_with" — that would
+# otherwise contribute no clause and silently widen the query to the whole table
+# (catastrophic when a bulk op runs against "all matching"). _filter_clause
+# rejects an unknown operator up front rather than dropping it.
+_KNOWN_OPS = (
+    set(_COMPARATORS) | set(_LIKE_PATTERNS) | {"between", "in", "isnull", "notnull"}
+)
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -258,6 +267,27 @@ def _escape_like(term: str) -> str:
     )
 
 
+def _reject_supplementary(term: str, field: str) -> None:
+    """
+    Reject text containing a supplementary-plane character (codepoint > U+FFFF,
+    e.g. an emoji) used in a LIKE pattern.
+
+    SQL Server stores such characters as a UTF-16 surrogate pair. Under a non-SC
+    collation (the default for most databases, including SQL_Latin1_General_CP1_
+    CI_AS), LIKE matches the pair as two separate code units, and the shared high
+    surrogate matches text in virtually every row — so an emoji in a search box
+    silently returns the whole table instead of a real match. We can't match
+    these correctly here, so reject them with per-field detail rather than
+    mislead. Storage and exact retrieval of supplementary characters are
+    unaffected; only LIKE pattern matching is.
+    """
+    if any(ord(ch) > 0xFFFF for ch in term):
+        raise ApiError(
+            ErrorCode.VALIDATION_ERROR,
+            fields={field: "Search text contains unsupported characters (e.g. emoji)."},
+        )
+
+
 def _require_filterable(info: ColumnInfo) -> None:
     """
     Reject a value filter on a column reflection marked non-comparable —
@@ -319,6 +349,15 @@ def _filter_clause(info: ColumnInfo, sa_col, raw):
     op  = raw.get("op", "eq")
     val = raw.get("value")
 
+    # An unknown operator is rejected, never dropped: a silently-ignored filter
+    # removes the constraint entirely, which turns a scoped "all matching" bulk
+    # operation into a full-table write. See _KNOWN_OPS.
+    if op not in _KNOWN_OPS:
+        raise ApiError(
+            ErrorCode.VALIDATION_ERROR,
+            fields={info.name: f"Unknown filter operator '{op}'."},
+        )
+
     if op == "isnull":
         return sa_col.is_(None)
     if op == "notnull":
@@ -328,8 +367,16 @@ def _filter_clause(info: ColumnInfo, sa_col, raw):
     _require_filterable(info)
 
     if op == "between":
+        # A malformed range (not exactly two bounds) is rejected, not dropped:
+        # a silently-removed filter widens to every row — and to a full-table
+        # write under an "all matching" bulk op. An *incomplete* range (one bound
+        # left blank) still drops harmlessly, matching the empty-value behaviour
+        # of gt/lt below — that's a half-filled filter chip, not a malformed one.
         if not isinstance(val, (list, tuple)) or len(val) != 2:
-            return None
+            raise ApiError(
+                ErrorCode.VALIDATION_ERROR,
+                fields={info.name: "The 'between' operator needs a [low, high] value pair."},
+            )
         low, high = val
         if low is None or high is None or low == "" or high == "":
             return None
@@ -339,9 +386,20 @@ def _filter_clause(info: ColumnInfo, sa_col, raw):
         return _in_clause(sa_col, val) if isinstance(val, list) and val else None
 
     if op in _LIKE_PATTERNS:
+        # LIKE only makes sense on a text column. On a numeric/date column SQL
+        # Server implicitly casts to a string and matches the cast text (e.g.
+        # contains "1" matches ids 1, 10, 11…) — surprising, unindexable, and
+        # never what the caller means. searchable marks the real string columns.
+        if not info.searchable:
+            raise ApiError(
+                ErrorCode.VALIDATION_ERROR,
+                fields={info.name: f"The '{op}' operator is only supported on text columns."},
+            )
         if val is None or val == "":
             return None
-        pattern = _LIKE_PATTERNS[op](_escape_like(str(val)))
+        text_val = str(val)
+        _reject_supplementary(text_val, info.name)
+        pattern = _LIKE_PATTERNS[op](_escape_like(text_val))
         return sa_col.like(pattern, escape="\\")
 
     comparator = _COMPARATORS.get(op)
@@ -360,6 +418,7 @@ def _search_clause(table: TableInfo, search: str):
     term = search.strip()
     if not term:
         return None
+    _reject_supplementary(term, "search")
     t = table.sa_table
     searchable = [t.c[col.name] for col in table.columns if col.searchable]
     if not searchable:
@@ -374,8 +433,13 @@ def _query_where(table: TableInfo, search: str, filters: dict[str, Any]) -> list
 
     Shared by the query endpoint and the bulk operations' "all matching" mode (via
     _resolve_bulk_target), so that "apply to everything matching" acts on exactly
-    the set the grid shows for the same search and filters. Unknown columns and
-    incomplete filters are skipped (see _filter_clause).
+    the set the grid shows for the same search and filters.
+
+    An unknown column or operator is rejected (VALIDATION_ERROR), not skipped: a
+    silently-dropped filter widens the result to every row, which — on a bulk
+    "all matching" delete/update — becomes a full-table write. All such problems
+    are collected so the client can fix them in one pass. Incomplete but valid
+    filters (a half-typed chip) still drop harmlessly (see _filter_clause).
     """
     clauses = []
     search_clause = _search_clause(table, search)
@@ -383,13 +447,26 @@ def _query_where(table: TableInfo, search: str, filters: dict[str, Any]) -> list
         clauses.append(search_clause)
 
     t = table.sa_table
+    field_errors: dict[str, str] = {}
     for col_name, raw in filters.items():
         info = table.column(col_name)
         if info is None or col_name not in t.c:
+            field_errors[col_name] = "Unknown column."
             continue
-        clause = _filter_clause(info, t.c[col_name], raw)
+        try:
+            clause = _filter_clause(info, t.c[col_name], raw)
+        except ApiError as e:
+            # Fold per-field operator errors into the one-pass report; anything
+            # else (e.g. a non-filterable column type → BAD_REQUEST) propagates.
+            if e.code is ErrorCode.VALIDATION_ERROR and e.fields:
+                field_errors.update(e.fields)
+                continue
+            raise
         if clause is not None:
             clauses.append(clause)
+
+    if field_errors:
+        raise ApiError(ErrorCode.VALIDATION_ERROR, fields=field_errors)
     return clauses
 
 
@@ -714,8 +791,21 @@ def query_rows(
         stmt       = stmt.where(clause)
         count_stmt = count_stmt.where(clause)
 
-    # Sorting — explicit column first, PK columns appended for stability
-    if body.sort.column and body.sort.column in t.c:
+    # Sorting — explicit column first, PK columns appended for stability. An
+    # unknown sort column or direction is rejected, not silently ignored: a
+    # dropped sort returns default-ordered rows while the client believes it
+    # sorted, so the mismatch is invisible.
+    if body.sort.column:
+        if body.sort.column not in t.c:
+            raise ApiError(
+                ErrorCode.VALIDATION_ERROR,
+                fields={"sort": f"Unknown column '{body.sort.column}'."},
+            )
+        if body.sort.direction not in ("asc", "desc"):
+            raise ApiError(
+                ErrorCode.VALIDATION_ERROR,
+                fields={"sort": f"Invalid sort direction '{body.sort.direction}'."},
+            )
         sa_col = t.c[body.sort.column]
         stmt = stmt.order_by(
             sa_col.desc() if body.sort.direction == "desc" else sa_col.asc()
@@ -725,15 +815,21 @@ def query_rows(
     if pk_cols:
         stmt = stmt.order_by(*pk_cols)
 
-    # Pagination. Reject an over-cap page_size rather than silently clamp it, so a
-    # client can't miscount pages against a size the server didn't actually use.
+    # Pagination. page_size is bounded on both ends and rejected out of range
+    # rather than silently clamped, so a client can't miscount pages against a
+    # size the server didn't use — a page_size of 0 would otherwise quietly
+    # become 1 and look like a working query that returned a single row. `page`
+    # below 1 clamps to the first page (harmless: it just shows page 1, and a
+    # page past the end already returns an empty page, not an error).
+    if body.page_size < 1:
+        raise ApiError(ErrorCode.BAD_REQUEST, "page_size must be at least 1.")
     if body.page_size > _MAX_PAGE_SIZE:
         raise ApiError(
             ErrorCode.BAD_REQUEST,
             f"page_size must be at most {_MAX_PAGE_SIZE}.",
         )
     page      = max(1, body.page)
-    page_size = max(1, body.page_size)
+    page_size = body.page_size
     offset    = (page - 1) * page_size
 
     total = _execute(db, count_stmt).scalar() or 0

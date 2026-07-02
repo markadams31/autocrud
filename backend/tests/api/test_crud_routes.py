@@ -253,10 +253,97 @@ def test_query_page_zero_or_negative_clamps_to_first(populated):
         assert len(body["data"]) == 10
 
 
-def test_query_page_size_zero_clamps_to_one(populated):
-    body = populated.client.post("/api/dbo/Widget/query", json={"page_size": 0}).json()
-    assert body["page_size"] == 1
-    assert len(body["data"]) == 1
+@pytest.mark.parametrize("size", [0, -1])
+def test_query_page_size_below_one_is_rejected(populated, size):
+    # A page_size of 0/-1 fails loud (400) rather than silently clamping to 1 —
+    # a clamped single row looks like a working query and hides the client bug.
+    resp = populated.client.post("/api/dbo/Widget/query", json={"page_size": size})
+    assert resp.status_code == 400
+    assert resp.json()["code"] == "BAD_REQUEST"
+
+
+# ── Query: unknown operators / columns are rejected, not silently dropped ─────
+
+def test_query_unknown_operator_is_rejected(populated):
+    # A typo'd operator (starts_with vs startswith) must not silently drop the
+    # filter — that would return every row, catastrophic on a bulk "all matching".
+    resp = populated.client.post(
+        "/api/dbo/Widget/query",
+        json={"filters": {"Name": {"op": "starts_with", "value": "Item-1"}}},
+    )
+    assert resp.status_code == 422
+    body = resp.json()
+    assert body["code"] == "VALIDATION_ERROR"
+    assert "Name" in body["fields"]
+
+
+def test_query_unknown_filter_column_is_rejected(populated):
+    resp = populated.client.post(
+        "/api/dbo/Widget/query",
+        json={"filters": {"NonExistentCol": {"op": "eq", "value": "x"}}},
+    )
+    assert resp.status_code == 422
+    assert resp.json()["fields"]["NonExistentCol"] == "Unknown column."
+
+
+def test_query_reports_all_bad_filters_in_one_pass(populated):
+    resp = populated.client.post(
+        "/api/dbo/Widget/query",
+        json={"filters": {
+            "NonExistentCol": {"op": "eq", "value": "x"},
+            "Quantity": {"op": "bogus_op", "value": 1},
+        }},
+    )
+    assert resp.status_code == 422
+    fields = resp.json()["fields"]
+    assert "NonExistentCol" in fields and "Quantity" in fields
+
+
+def test_query_unknown_sort_column_is_rejected(populated):
+    resp = populated.client.post(
+        "/api/dbo/Widget/query", json={"sort": {"column": "Nope", "direction": "asc"}}
+    )
+    assert resp.status_code == 422
+    assert "sort" in resp.json()["fields"]
+
+
+def test_query_invalid_sort_direction_is_rejected(populated):
+    resp = populated.client.post(
+        "/api/dbo/Widget/query",
+        json={"sort": {"column": "Quantity", "direction": "sideways"}},
+    )
+    assert resp.status_code == 422
+    assert "sort" in resp.json()["fields"]
+
+
+def test_query_emoji_search_is_rejected(populated):
+    # An emoji (supplementary plane) can't be matched correctly under a non-SC
+    # collation and would otherwise LIKE-match every row — reject it instead.
+    resp = populated.client.post("/api/dbo/Widget/query", json={"search": "📊"})
+    assert resp.status_code == 422
+    assert resp.json()["code"] == "VALIDATION_ERROR"
+
+
+@pytest.mark.parametrize("value", [[10], [10, 12, 14]])
+def test_query_between_wrong_arity_is_rejected(populated, value):
+    # A between value that isn't a [low, high] pair must not silently match all.
+    resp = populated.client.post(
+        "/api/dbo/Widget/query",
+        json={"filters": {"Quantity": {"op": "between", "value": value}}},
+    )
+    assert resp.status_code == 422
+    assert "Quantity" in resp.json()["fields"]
+
+
+def test_query_contains_on_numeric_column_is_rejected(populated):
+    # contains on an integer column would implicitly cast and return surprising
+    # matches (Quantity 1, 10, 11…); it must be rejected as a text-only operator.
+    resp = populated.client.post(
+        "/api/dbo/Widget/query",
+        json={"filters": {"Quantity": {"op": "contains", "value": "1"}}},
+    )
+    assert resp.status_code == 422
+    assert "Quantity" in resp.json()["fields"]
 
 
 # ── Update: server-controlled columns can't be changed via PATCH/PUT ─────────
