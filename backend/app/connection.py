@@ -58,11 +58,11 @@ import threading
 import time
 from typing import Iterator, Optional
 
-import pyodbc
+import mssql_python
 from cachetools import TTLCache
 from azure.identity import DefaultAzureCredential
 from fastapi import Request
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.pool import QueuePool
 from sqlalchemy.exc import OperationalError, InterfaceError, ResourceClosedError
@@ -75,7 +75,7 @@ from tenacity import (
 )
 
 from app.auth_headers import USER_ACCESS_TOKEN
-from app.config import DB_SERVER, DB_DATABASE, DB_DRIVER
+from app.config import DB_SERVER, DB_DATABASE
 from app.errors import ApiError, ErrorCode
 
 logger = logging.getLogger(__name__)
@@ -83,26 +83,32 @@ logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Database
+#
+# mssql-python bundles its own driver, so the connection string carries no
+# Driver= token and the runtime image installs no msodbcsql/unixODBC. Both
+# engines are built with an explicit `creator` that calls mssql_python.connect
+# directly — the URL exists only to select the SQLAlchemy dialect.
 # ---------------------------------------------------------------------------
 
-_DSN = f"Driver={{{DB_DRIVER}}};Server={DB_SERVER};Database={DB_DATABASE};Encrypt=yes;"
-_SQLALCHEMY_URL = "mssql+pyodbc:///?odbc_connect=" + _DSN
+_CONN_STR = f"Server={DB_SERVER};Database={DB_DATABASE};Encrypt=yes;"
+_DIALECT_URL = "mssql+mssqlpython://"
 
 
 # ---------------------------------------------------------------------------
 # Token plumbing
 #
-# Azure SQL accepts an OAuth bearer token through a special ODBC connection
-# attribute instead of a username/password. The token must be packed as its
+# Azure SQL accepts an OAuth bearer token through a special pre-connect
+# attribute instead of a username/password (mssql-python exposes the same
+# attrs_before mechanism as pyodbc). The token must be packed as its
 # UTF-16-LE bytes, prefixed with a 4-byte little-endian length.
 # ---------------------------------------------------------------------------
 
-SQL_COPT_SS_ACCESS_TOKEN = 1256  # ODBC attribute id for the access token
+SQL_COPT_SS_ACCESS_TOKEN = 1256  # pre-connect attribute id for the access token
 AZURE_SQL_SCOPE          = "https://database.windows.net/.default"
 
 
 def _pack_token(token: str) -> bytes:
-    """Pack an access token into the byte structure the ODBC driver expects."""
+    """Pack an access token into the byte structure the driver expects."""
     raw = token.encode("utf-16-le")
     return struct.pack(f"<I{len(raw)}s", len(raw), raw)
 
@@ -113,17 +119,24 @@ def _pack_token(token: str) -> bytes:
 
 _credential = DefaultAzureCredential()
 
+
+def _reflection_connect():
+    # Fetch the managed-identity token per new physical connection (the
+    # credential caches and refreshes it internally), so a pooled connection
+    # opened later never carries a stale token.
+    token_obj = _credential.get_token(AZURE_SQL_SCOPE)
+    return mssql_python.connect(
+        _CONN_STR,
+        attrs_before={SQL_COPT_SS_ACCESS_TOKEN: _pack_token(token_obj.token)},
+    )
+
+
 reflection_engine = create_engine(
-    _SQLALCHEMY_URL,
+    _DIALECT_URL,
+    creator=_reflection_connect,
     pool_pre_ping=True,
     pool_recycle=1500,
 )
-
-
-@event.listens_for(reflection_engine, "do_connect")
-def _inject_managed_identity_token(dialect, conn_rec, cargs, cparams):
-    token_obj = _credential.get_token(AZURE_SQL_SCOPE)
-    cparams["attrs_before"] = {SQL_COPT_SS_ACCESS_TOKEN: _pack_token(token_obj.token)}
 
 
 # ---------------------------------------------------------------------------
@@ -245,12 +258,12 @@ def _build_user_engine(token: str) -> Engine:
     tokens.
     """
     def _connect():
-        return pyodbc.connect(
-            _DSN, attrs_before={SQL_COPT_SS_ACCESS_TOKEN: _pack_token(token)}
+        return mssql_python.connect(
+            _CONN_STR, attrs_before={SQL_COPT_SS_ACCESS_TOKEN: _pack_token(token)}
         )
 
     return create_engine(
-        "mssql+pyodbc://",
+        _DIALECT_URL,
         creator=_connect,
         poolclass=QueuePool,
         pool_size=1,

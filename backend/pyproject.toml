@@ -11,8 +11,15 @@ requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.49.0",
-    "sqlalchemy>=2.0",
-    "pyodbc>=5.0",
+    # 2.1.0b2 added the mssql+mssqlpython dialect; pinned to the beta until 2.1
+    # final ships. Reflection behaviour verified identical to 2.0 against SQL
+    # Server 2025 (the golden snapshot passes unchanged).
+    "sqlalchemy==2.1.0b3",
+    # Microsoft's first-party driver, replacing pyodbc: natively fetches the CLR
+    # types (hierarchyid/geometry/geography) and sql_variant that pyodbc raises
+    # -151/-16 on, and bundles its own driver — no msodbcsql18/unixODBC install
+    # in the runtime image. json/vector fetch as strings, same as before.
+    "mssql-python>=1.10",
     "azure-identity>=1.15",
     "cachetools>=5.3",      # TTLCache.expire() returning evicted items requires 5.3+
     "python-dotenv>=1.0",
@@ -44,6 +51,10 @@ test = [
     "httpx>=0.27",          # FastAPI TestClient transport
     "pytest-cov>=5.0",
     "testcontainers>=4.0",  # tier-3 only; needs Docker at runtime
+    # Test-only since the mssql-python switch: the integration conftest still
+    # bootstraps the container with pyodbc (readiness poll + schema load); the
+    # app itself no longer imports it.
+    "pyodbc>=5.0",
     # Type gate. Lives in the test extra so `uv run pyright` resolves against the
     # app's real dependencies (SQLAlchemy/Pydantic types) — the CI job and the
     # pre-commit hook both invoke it that way. See [tool.pyright] below.

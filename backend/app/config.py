@@ -42,9 +42,11 @@ class Settings(BaseSettings):
     # Env var names are matched case-insensitively (DB_SERVER → db_server).
     model_config = SettingsConfigDict(case_sensitive=False, extra="ignore")
 
+    # No DB_DRIVER setting: mssql-python bundles its own SQL Server driver, so
+    # there is no ODBC driver name to configure. (A leftover DB_DRIVER env var
+    # from an older deployment is ignored via extra="ignore".)
     db_server: str = Field(min_length=1)
     db_database: str = Field(min_length=1)
-    db_driver: str = Field(min_length=1)
 
     # How the signed-in user's identity appears in logs (access log + the CRUD
     # audit lines). The user's email is PII; in a shared/production deployment
@@ -133,7 +135,6 @@ _settings = _build_settings()
 # surface across the app.
 DB_SERVER:        str       = _settings.db_server
 DB_DATABASE:      str       = _settings.db_database
-DB_DRIVER:        str       = _settings.db_driver
 DB_SCHEMAS:       list[str] = _settings.db_schemas
 DB_AUDIT_COLUMNS: set[str]  = _settings.db_audit_columns
 BULK_MAX_ROWS:    int       = _settings.bulk_max_rows

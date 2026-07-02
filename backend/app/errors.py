@@ -445,13 +445,17 @@ def friendly_constraint_violation(
 #   - anything else                          -> INTERNAL_ERROR (500)
 # ---------------------------------------------------------------------------
 
-# The ODBC driver appends the SQL Server native error number just before the
-# function name, e.g. "...of like function. (8116) (SQLExecDirectW)".
+# pyodbc appends the SQL Server native error number just before the function
+# name, e.g. "...of like function. (8116) (SQLExecDirectW)". mssql-python does
+# NOT expose the native number anywhere (not in the message, not as an
+# attribute), so number-based detection only fires under pyodbc; every case
+# below therefore also has a text pattern carrying the same signal.
 _SQL_ERRNO_RE = re.compile(r"\((\d{2,6})\)\s*\(SQL\w+\)")
 
 # Authorization failures (a denied grant under the signed-in user's identity).
 # They surface as ProgrammingError/42000 — the same class as a malformed query —
-# so detect them by number, with the message text as a backstop.
+# so detect them by number where available, with the message text as the
+# primary signal under mssql-python.
 _PERMISSION_ERRORS = frozenset({229, 230, 262, 297, 300, 916, 6004, 10330})
 _PERMISSION_RE = re.compile(
     r"permission (?:was )?denied"
@@ -468,6 +472,16 @@ _PERMISSION_RE = re.compile(
 #   241  date/time conversion failed   245  varchar→int/other conversion failed
 #   8114 error converting data type    8116 arg data type invalid for function
 _BAD_QUERY_ERRORS = frozenset({206, 241, 245, 402, 8114, 8116})
+# The same cases matched on SQL Server's message text (one alternative per
+# error number above, same order) — the working signal under mssql-python.
+_BAD_QUERY_RE = re.compile(
+    r"operand type clash"                       # 206
+    r"|are incompatible in the .* operator"     # 402
+    r"|conversion failed when converting"       # 241 / 245
+    r"|error converting data type"              # 8114
+    r"|data type .* is invalid for",            # 8116
+    re.IGNORECASE,
+)
 
 
 def _sql_error_number(text: str) -> Optional[int]:
@@ -504,8 +518,9 @@ def map_database_exception(exc: Exception, sa_table: object = None) -> ApiError:
         return ApiError(ErrorCode.PERMISSION_DENIED)
 
     # A value/operator the database can't run is a client mistake — a 400, not a
-    # permission failure (403) or a data-rule conflict (409).
-    if number in _BAD_QUERY_ERRORS:
+    # permission failure (403) or a data-rule conflict (409). Number under
+    # pyodbc, text under mssql-python (which exposes no native number).
+    if number in _BAD_QUERY_ERRORS or _BAD_QUERY_RE.search(text):
         return ApiError(
             ErrorCode.BAD_REQUEST,
             "The request contains a value or operator that can't be processed.",

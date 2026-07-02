@@ -70,6 +70,17 @@ _XML_LIKE = f"[42000] {_DRV}Argument data type xml is invalid for argument 1 of 
 _CONVERT = f"[42000] {_DRV}Error converting data type varchar to real. (8114) (SQLExecDirectW)"
 _PK_CONVERT = f"[22018] {_DRV}Conversion failed when converting the varchar value 'export' to data type int. (245) (SQLExecDirectW)"
 
+# The same failures as mssql-python surfaces them (verified against SQL Server
+# 2025): a "Driver Error: <odbc class>; DDBC Error: [Microsoft][SQL Server]<text>"
+# message with NO native error number anywhere — so the mapper's text patterns,
+# not the number, carry the signal for this driver.
+_MP = "Driver Error: Syntax error or access violation; DDBC Error: [Microsoft][SQL Server]"
+_MP_PERM = f"{_MP}The SELECT permission was denied on the object 'Category', database 'db', schema 'app'."
+_MP_XML_LIKE = f"{_MP}Argument data type xml is invalid for argument 1 of like function."
+_MP_CONVERT = ("Driver Error: Invalid character value for cast specification; "
+               "DDBC Error: [Microsoft][SQL Server]Conversion failed when converting "
+               "the varchar value 'not-a-number' to data type int.")
+
 
 @pytest.mark.parametrize(
     "exc,expected",
@@ -86,6 +97,11 @@ _PK_CONVERT = f"[22018] {_DRV}Conversion failed when converting the varchar valu
         (ProgrammingError("stmt", {}, Exception(_XML_LIKE)), ErrorCode.BAD_REQUEST),
         (ProgrammingError("stmt", {}, Exception(_CONVERT)), ErrorCode.BAD_REQUEST),
         (DataError("stmt", {}, Exception(_PK_CONVERT)), ErrorCode.BAD_REQUEST),
+        # mssql-python shapes of the same failures — no native error number, so
+        # the text patterns must reach the same codes.
+        (ProgrammingError("stmt", {}, Exception(_MP_PERM)), ErrorCode.PERMISSION_DENIED),
+        (ProgrammingError("stmt", {}, Exception(_MP_XML_LIKE)), ErrorCode.BAD_REQUEST),
+        (DataError("stmt", {}, Exception(_MP_CONVERT)), ErrorCode.BAD_REQUEST),
         (OperationalError("stmt", {}, Exception("timeout")), ErrorCode.DATABASE_UNAVAILABLE),
         # An unattributed ProgrammingError means our generated SQL is malformed — a
         # bug, so a 500 rather than a misleading 403.

@@ -15,7 +15,6 @@ import os
 import re
 import subprocess
 import time
-import urllib.parse
 
 import pytest
 
@@ -61,10 +60,24 @@ def _odbc_dsn(
 
 
 def _engine(driver: str, host: str, port: str, database: str, uid: str = "sa", pwd: str = SA_PASSWORD):
-    return create_engine(
-        "mssql+pyodbc:///?odbc_connect="
-        + urllib.parse.quote_plus(_odbc_dsn(driver, host, port, database, uid, pwd))
+    """
+    An Engine on the app's production driver (mssql-python), so every
+    integration test exercises the same DBAPI the app ships with. pyodbc is
+    used only to bootstrap the container (readiness poll + schema load); the
+    `driver` argument names the ODBC driver for that bootstrap DSN and is
+    unused here — mssql-python bundles its own driver.
+    """
+    conn_str = (
+        f"Server={host},{port};Database={database};"
+        f"UID={uid};PWD={pwd};Encrypt=no;TrustServerCertificate=yes;"
     )
+
+    def _connect():
+        import mssql_python
+
+        return mssql_python.connect(conn_str)
+
+    return create_engine("mssql+mssqlpython://", creator=_connect)
 
 
 def _run_sql_script(pyodbc_conn, sql: str) -> None:
