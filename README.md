@@ -207,8 +207,12 @@ the application. This keeps audit logic consistent across every tool that touche
 not just this API.
 
 **Excluded** — a small set of types that aren't safely writable through a generic layer:
-binary / `rowversion`, `XML`, and `sql_variant`. Binary and XML are surfaced read-only in
-metadata; `sql_variant` is omitted entirely (no fixed shape).
+binary / `rowversion`, `XML`, `sql_variant`, and `vector`. Binary and XML are surfaced
+read-only in metadata; `sql_variant` is omitted entirely (no fixed shape). A `vector`
+(Azure SQL / SQL Server 2025) column holds a machine-generated embedding that a client
+can't meaningfully hand-edit, so it too is read-only. The mssql dialect doesn't yet ship a
+vector type, so the app registers one for reflection (`app/mssql_types.py`) — the column
+then reflects as a real type and is excluded by type like the rest, rather than special-cased.
 
 Temporal history tables are excluded from the API entirely (detected via `sys.tables`,
 `temporal_type = 1`). Tables without a primary key are also excluded.

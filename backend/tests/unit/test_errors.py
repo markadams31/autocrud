@@ -12,6 +12,8 @@ from app.errors import (
     ErrorCode,
     _DEFAULT_MESSAGES,
     _STATUS_CODES,
+    _check_constraint_expressions,
+    _humanize_check_expression,
     bad_request,
     friendly_constraint_violation,
     map_database_exception,
@@ -127,8 +129,8 @@ def test_unique_violation_without_table_keeps_constraint_and_value():
 
 
 def test_check_violation_recovers_column_from_constraint_expression():
-    # The message omits the column, so it's recovered from the constraint's
-    # columns (which _constraint_columns parses out of the check expression).
+    # The message omits the column, so it's supplied via columns_by_constraint
+    # (which _constraint_columns builds from the catalog-reflected check data).
     msg, fields = friendly_constraint_violation(_CHECK, {"CK_Project_Percent": ["PercentComplete"]})
     assert msg == "'PercentComplete' is not allowed by validation rule CK_Project_Percent."
     assert fields == {"PercentComplete": "Not allowed by CK_Project_Percent."}
@@ -145,6 +147,91 @@ def test_check_violation_multi_column_lists_them():
     msg, fields = friendly_constraint_violation(text, {"CK_Project_Dates": ["StartDate", "EndDate"]})
     assert "StartDate, EndDate" in msg and "CK_Project_Dates" in msg
     assert fields == {"StartDate": "Not allowed by CK_Project_Dates.", "EndDate": "Not allowed by CK_Project_Dates."}
+
+
+# ── CHECK violations quote the actual rule when the expression is known ───────
+# When the reflected constraint expression is available (checks_by_constraint,
+# from _check_constraint_expressions), the message quotes the rule itself rather
+# than a constraint name the user has never seen.
+
+_CHECKS = {"CK_Project_Percent": "PercentComplete >= 0 AND PercentComplete <= 100"}
+
+
+def test_check_violation_quotes_the_rule_with_column():
+    msg, fields = friendly_constraint_violation(
+        _CHECK, {"CK_Project_Percent": ["PercentComplete"]}, _CHECKS
+    )
+    assert msg == "'PercentComplete' must satisfy: PercentComplete >= 0 AND PercentComplete <= 100."
+    assert fields == {"PercentComplete": "Must satisfy: PercentComplete >= 0 AND PercentComplete <= 100."}
+
+
+def test_check_violation_quotes_the_rule_without_a_column():
+    msg, fields = friendly_constraint_violation(_CHECK, None, _CHECKS)
+    assert msg == "A value must satisfy the rule: PercentComplete >= 0 AND PercentComplete <= 100."
+    assert fields is None
+
+
+def test_check_violation_falls_back_to_name_when_expression_unknown():
+    # No entry in checks_by_constraint (e.g. VIEW DEFINITION not held at reflection)
+    # → the pre-existing name-based message, unchanged.
+    msg, fields = friendly_constraint_violation(_CHECK, {"CK_Project_Percent": ["PercentComplete"]}, {})
+    assert msg == "'PercentComplete' is not allowed by validation rule CK_Project_Percent."
+    assert fields == {"PercentComplete": "Not allowed by CK_Project_Percent."}
+
+
+@pytest.mark.parametrize(
+    "stored,expected",
+    [
+        ("([PercentComplete]>=(0) AND [PercentComplete]<=(100))",
+         "PercentComplete >= 0 AND PercentComplete <= 100"),
+        ("([Price]>(0))", "Price > 0"),
+        ("([EndDate]>=[StartDate])", "EndDate >= StartDate"),
+        ("([Status]='active')", "Status = 'active'"),
+        ("([Discount]<>(1.5))", "Discount <> 1.5"),
+        ("([Balance]>=(-1))", "Balance >= -1"),
+    ],
+)
+def test_humanize_check_expression(stored, expected):
+    assert _humanize_check_expression(stored) == expected
+
+
+def test_check_expressions_reflected_from_table_info():
+    # The mssql dialect doesn't reflect CHECK constraints onto table.constraints, so
+    # reflection reads them from sys.check_constraints and parks them on
+    # Table.info["check_constraints"] as {name: (column|None, definition)} — see
+    # reflection._check_constraints / _build_table_info. This mirrors that shape.
+    from sqlalchemy import Column, MetaData, Table
+    from sqlalchemy.dialects.mssql import INTEGER
+
+    md = MetaData()
+    t = Table("Project", md, Column("PercentComplete", INTEGER()), schema="ppm")
+    t.info["check_constraints"] = {
+        "CK_Project_Percent": ("PercentComplete", "([PercentComplete]>=(0) AND [PercentComplete]<=(100))"),
+    }
+    assert _check_constraint_expressions(t) == {
+        "CK_Project_Percent": "PercentComplete >= 0 AND PercentComplete <= 100"
+    }
+    # And the whole path end-to-end: a driver CHECK message + that table produces a
+    # user-facing message that quotes the rule and highlights the column.
+    mapped = map_database_exception(
+        IntegrityError("UPDATE ppm.Project ...", {}, Exception(_CHECK)), t
+    )
+    assert mapped.code == ErrorCode.CONSTRAINT_VIOLATION
+    assert mapped.message == "'PercentComplete' must satisfy: PercentComplete >= 0 AND PercentComplete <= 100."
+    assert "UPDATE ppm.Project" not in mapped.message  # never leak the raw statement
+
+
+def test_check_columns_recovered_from_table_level_definition():
+    # A table-level check has no parent column (col is None), so _constraint_columns
+    # recovers the columns from the bracketed identifiers in the definition text.
+    from app.errors import _constraint_columns
+    from sqlalchemy import Column, MetaData, Table
+    from sqlalchemy.dialects.mssql import DATE
+
+    md = MetaData()
+    t = Table("Project", md, Column("StartDate", DATE()), Column("EndDate", DATE()), schema="ppm")
+    t.info["check_constraints"] = {"CK_Dates": (None, "([EndDate]>=[StartDate])")}
+    assert set(_constraint_columns(t)["CK_Dates"]) == {"StartDate", "EndDate"}
 
 
 def test_fk_violation_resolves_to_the_local_column_the_user_edited():

@@ -164,6 +164,12 @@ CREATE TABLE dbo.AllTypes (
     -- unknown type → str / EDITABLE fallback
     ColHierarchy        HIERARCHYID     NULL,
 
+    -- SQL Server 2025 native types. The mssql dialect can't model either, so both
+    -- are resolved from the catalog: json → EDITABLE str, vector → EXCLUDED (it
+    -- reflects as varbinary). See reflection._column_flags / _display_sql_type.
+    ColJson             JSON            NULL,
+    ColVector           VECTOR(3)       NULL,
+
     -- computed
     ColComputed          AS (ColInt * 2),
     ColComputedPersisted AS (ColBigInt + 1) PERSISTED,
@@ -240,6 +246,45 @@ CREATE TABLE dbo.Concurrent (
     ConcurrentID INT           IDENTITY(1,1) NOT NULL CONSTRAINT PK_Concurrent PRIMARY KEY,
     Name         NVARCHAR(100) NOT NULL,
     RowVersion   ROWVERSION    NOT NULL
+);
+GO
+
+-- ── CLR / spatial / sql_variant read round-trip ──────────────────────────────
+-- The pyodbc driver cannot materialise a CLR UDT (hierarchyid/geometry/geography,
+-- ODBC type -151) or sql_variant (-16) in a result row: a plain SELECT of one
+-- fails the whole read. Reflection flags them ColumnInfo.fetchable=False and the
+-- read path CASTs them to NVARCHAR (routes/crud._read_columns), so a row is
+-- readable — value returned as text (WKT for spatial, path for hierarchyid). A
+-- seeded row exercises that end to end. Doc (json) is a genuinely editable column
+-- alongside them.
+CREATE TABLE dbo.Spatial (
+    SpatialID INT           IDENTITY(1,1) NOT NULL CONSTRAINT PK_Spatial PRIMARY KEY,
+    Name      NVARCHAR(100) NOT NULL,
+    Geo       GEOGRAPHY     NULL,
+    Shape     GEOMETRY      NULL,
+    Node      HIERARCHYID   NULL,
+    Variant   SQL_VARIANT   NULL,
+    Doc       JSON          NULL
+);
+GO
+INSERT INTO dbo.Spatial (Name, Geo, Shape, Node, Variant, Doc)
+VALUES (N'origin',
+        geography::STGeomFromText('POINT(-122 47)', 4326),
+        geometry::STGeomFromText('LINESTRING(0 0, 1 1)', 0),
+        '/1/2/',
+        CAST(42 AS SQL_VARIANT),
+        N'{"k": 1}');
+GO
+
+-- ── CHECK constraint feedback ────────────────────────────────────────────────
+-- SQLAlchemy's mssql dialect doesn't reflect CHECK constraints, so reflection
+-- reads them from sys.check_constraints (reflection._check_constraints) and the
+-- error layer quotes the failed rule instead of only its name. A single-column
+-- check lets the test assert the message names the column and quotes the rule.
+CREATE TABLE dbo.Checked (
+    CheckedID INT IDENTITY(1,1) NOT NULL CONSTRAINT PK_Checked PRIMARY KEY,
+    Name      NVARCHAR(100) NOT NULL,
+    Score     INT           NOT NULL CONSTRAINT CK_Checked_Score CHECK (Score >= 0 AND Score <= 100)
 );
 GO
 

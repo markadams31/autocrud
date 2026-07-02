@@ -15,6 +15,7 @@ from sqlalchemy.dialects.mssql import (
     TIMESTAMP, TINYINT, UNIQUEIDENTIFIER, VARBINARY, VARCHAR, XML,
 )
 
+from app.mssql_types import GEOGRAPHY, GEOMETRY, HIERARCHYID, JSON, VECTOR
 from app.reflection import (
     ColumnKind,
     _classify,
@@ -51,13 +52,29 @@ def test_plain_types_are_editable(sa_type):
 
 
 # ── Types unsafe to write → EXCLUDED ─────────────────────────────────────────
+# VECTOR/GEOMETRY/GEOGRAPHY are registered for reflection in app.mssql_types, so
+# once reflected they are real types and classify EXCLUDED by isinstance — same
+# path as binary/XML. A raw embedding or spatial value isn't hand-editable through
+# a generic layer, so they're read-only.
 
-EXCLUDED_TYPES = [VARBINARY(), BINARY(), IMAGE(), TIMESTAMP(), XML(), SQL_VARIANT()]
+EXCLUDED_TYPES = [
+    VARBINARY(), BINARY(), IMAGE(), TIMESTAMP(), XML(), SQL_VARIANT(),
+    VECTOR(), GEOMETRY(), GEOGRAPHY(),
+]
 
 
 @pytest.mark.parametrize("sa_type", EXCLUDED_TYPES, ids=lambda t: type(t).__name__)
 def test_unsupported_types_are_excluded(sa_type):
     col = make_column("Field", sa_type)
+    assert _classify(col, set()) is ColumnKind.EXCLUDED
+
+
+# ── VECTOR precedence: EXCLUDED even when named like an audit column ──────────
+
+def test_vector_exclusion_wins_over_audit_name():
+    # EXCLUDED (by type) must beat the name-based DB_OWNED path — a VECTOR named
+    # like an audit column is still read-only, not database-owned-but-editable.
+    col = make_column("CreatedBy", VECTOR())
     assert _classify(col, set()) is ColumnKind.EXCLUDED
 
 
@@ -196,3 +213,13 @@ def test_audit_classification_honours_runtime_set(monkeypatch):
 def test_excluded_type_takes_precedence_over_audit_name():
     col = make_column("CreatedBy", VARBINARY())
     assert _classify(col, set()) is ColumnKind.EXCLUDED
+
+
+# ── Registered string-backed types stay EDITABLE ─────────────────────────────
+# JSON (a document) and HIERARCHYID (a "/1/2/" path) are registered for reflection
+# in app.mssql_types like VECTOR, but unlike VECTOR they round-trip as plain
+# strings, so they remain client-writable.
+
+@pytest.mark.parametrize("sa_type", [JSON(), HIERARCHYID()], ids=lambda t: type(t).__name__)
+def test_string_backed_registered_types_are_editable(sa_type):
+    assert _classify(make_column("Field", sa_type), set()) is ColumnKind.EDITABLE

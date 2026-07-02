@@ -184,6 +184,60 @@ def test_persisted_computed_fk_combo(reflected):
     assert _col(reflected.get("dbo", "Project"), "DurationDays").kind is ColumnKind.DB_OWNED
 
 
+# ── SQL Server 2025 native types (json / vector), registered in mssql_types ──
+
+def test_native_json_is_editable_string(reflected):
+    c = _col(reflected.get("dbo", "AllTypes"), "ColJson")
+    assert c.kind is ColumnKind.EDITABLE
+    assert c.python_type is str
+    assert c.sql_type == "JSON"      # registered type, not the dialect's "NULL"
+    assert c.fetchable is True
+
+
+def test_native_vector_is_excluded(reflected):
+    c = _col(reflected.get("dbo", "AllTypes"), "ColVector")
+    assert c.kind is ColumnKind.EXCLUDED
+    assert c.sql_type == "VECTOR"    # registered type, not "VARBINARY(20)"
+    assert c.max_length is None      # the varbinary byte count is not surfaced
+
+
+def test_json_in_create_model_vector_not(reflected):
+    fields = set(reflected.get("dbo", "AllTypes").create_model.model_fields)
+    assert "ColJson" in fields
+    assert "ColVector" not in fields
+
+
+# ── CLR / spatial / sql_variant classification + fetchability ────────────────
+
+def test_spatial_types_excluded_and_unfetchable(reflected):
+    s = reflected.get("dbo", "Spatial")
+    for name, disp in [("Geo", "GEOGRAPHY"), ("Shape", "GEOMETRY")]:
+        c = _col(s, name)
+        assert c.kind is ColumnKind.EXCLUDED
+        assert c.sql_type == disp
+        assert c.fetchable is False
+
+
+def test_hierarchyid_editable_but_unfetchable(reflected):
+    c = _col(reflected.get("dbo", "Spatial"), "Node")
+    assert c.kind is ColumnKind.EDITABLE       # a path string round-trips
+    assert c.python_type is str
+    assert c.sql_type == "HIERARCHYID"
+    assert c.fetchable is False                 # ...but pyodbc can't SELECT it raw
+
+
+def test_sql_variant_excluded_and_unfetchable(reflected):
+    c = _col(reflected.get("dbo", "Spatial"), "Variant")
+    assert c.kind is ColumnKind.EXCLUDED
+    assert c.fetchable is False
+
+
+def test_spatial_create_model_only_has_editable_columns(reflected):
+    # Geo/Shape/Variant EXCLUDED, SpatialID identity → only Name/Node/Doc remain.
+    fields = set(reflected.get("dbo", "Spatial").create_model.model_fields)
+    assert fields == {"Name", "Node", "Doc"}
+
+
 # ── Display-column heuristic ─────────────────────────────────────────────────
 
 def test_display_columns(reflected):

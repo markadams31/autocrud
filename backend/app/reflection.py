@@ -72,10 +72,27 @@ TIMESTAMP/rowversion columns are also server-generated — SQL Server will
 reject writes at the engine level, so excluding them prevents a confusing
 runtime error.
 
-HIERARCHYID falls back to str and lands as EDITABLE — this SQLAlchemy
-version's mssql dialect doesn't export a HIERARCHYID type to check
-against. If your schema uses it, add it to _EXCLUDED_WRITE_TYPES once
-a newer SQLAlchemy version exports the type.
+Types the mssql dialect doesn't model
+-------------------------------------
+The installed dialect only knows the types in its ischema_names table. Anything
+outside it — SQL Server 2025's json and vector, plus the CLR types
+geography/geometry/hierarchyid — would otherwise reflect as a nameless NullType
+(str(col.type) == "NULL", warned, un-isinstance-able). app.mssql_types registers
+each of them so reflection produces a real, named type that flows through the
+same isinstance/str machinery as every built-in. Their treatment then splits on
+two independent axes:
+
+  Writable?    json and hierarchyid are plain strings that round-trip, so they
+               stay EDITABLE. vector/geometry/geography are structured-but-opaque
+               (a raw embedding or spatial value a client can't hand-edit), so
+               they join _EXCLUDED_WRITE_TYPES alongside binary/XML.
+  Fetchable?   The CLR types (hierarchyid/geometry/geography) can't be read back
+               by pyodbc in a result row (ODBC type -151), so they are flagged
+               _UNFETCHABLE_TYPES and ColumnInfo.fetchable=False; the read path
+               CASTs them to text — WKT for spatial, the path string for
+               hierarchyid (see routes/crud._read_columns). sql_variant (-16) is
+               the same: excluded from writes AND unfetchable. json and vector
+               fetch fine (vector comes back as a JSON-array string).
 
 Decimal handling
 -----------------
@@ -105,6 +122,11 @@ from sqlalchemy.dialects.mssql import (
 
 from app.config import DB_SCHEMAS, DB_AUDIT_COLUMNS
 from app.connection import reflection_engine, _connect_with_retry
+# Importing this registers VECTOR/GEOMETRY/GEOGRAPHY/HIERARCHYID/JSON into the
+# mssql dialect's reflection map, so metadata.reflect() below produces real typed
+# columns instead of NullType — and each then classifies by isinstance like any
+# other built-in. See app.mssql_types for why registration beats a catalog read.
+from app.mssql_types import VECTOR, GEOMETRY, GEOGRAPHY, HIERARCHYID
 
 logger = logging.getLogger(__name__)
 
@@ -136,12 +158,21 @@ _DB_GENERATING_FUNCTIONS = {
 # Types excluded from write payloads. Surfaced read-only in metadata as str
 # where representable; sql_variant omitted entirely (no fixed shape).
 _EXCLUDED_WRITE_TYPES = (
-    VARBINARY, BINARY, IMAGE, TIMESTAMP,  # binary / rowversion
-    XML,                                   # structured-but-opaque
-    SQL_VARIANT,                           # no fixed shape
+    VARBINARY, BINARY, IMAGE, TIMESTAMP,   # binary / rowversion
+    XML,                                    # structured-but-opaque
+    SQL_VARIANT,                            # no fixed shape
+    VECTOR, GEOMETRY, GEOGRAPHY,            # machine-generated / spatial (read-only); registered in app.mssql_types
 )
 
 _UNREPRESENTABLE_TYPES = (SQL_VARIANT,)
+
+# Types the pyodbc driver cannot materialise in a result row: the CLR UDTs
+# (hierarchyid/geometry/geography → ODBC type -151) and sql_variant (-16). A plain
+# SELECT of such a column raises "ODBC SQL type -151/-16 is not yet supported" and
+# fails the whole read, so ColumnInfo.fetchable flags them for the read path to
+# CAST to NVARCHAR (see routes/crud._read_columns). The CLR types are recognised
+# via app.mssql_types; json and vector fetch fine and are deliberately absent.
+_UNFETCHABLE_TYPES = (HIERARCHYID, GEOMETRY, GEOGRAPHY, SQL_VARIANT)
 
 
 def _server_default_generates_value(col: Column) -> bool:
@@ -196,6 +227,12 @@ def _classify(
 ) -> ColumnKind:
     """
     Classify a column as EXCLUDED, DB_OWNED, or EDITABLE.
+
+    EXCLUDED is decided by type (_EXCLUDED_WRITE_TYPES): binary/rowversion, XML,
+    sql_variant, and VECTOR. VECTOR isn't a built-in the dialect knows, so it's
+    registered for reflection in app.mssql_types — once reflected as a real type,
+    it's excluded here by isinstance like all the others. Excluding wins over
+    every other category — an unwritable type is never client-writable.
 
     DB_OWNED is reached two ways:
       - Structural (_is_db_owned): identity, computed, a value-generating
@@ -286,6 +323,7 @@ class ColumnInfo:
     precision: Optional[int]
     scale: Optional[int]
     foreign_key: Optional[tuple[str, str, str]]  # (schema, table, column) or None
+    fetchable: bool = True        # False = pyodbc can't SELECT it; read path CASTs to text (see _UNFETCHABLE_TYPES)
 
     @property
     def is_editable(self) -> bool:
@@ -407,6 +445,10 @@ def _column_flags(conn, schemas: list[str]) -> _ColumnFlags:
 
     GENERATED ALWAYS period columns (ROW START / ROW END) and computed columns are
     both rejected by SQL Server on any explicit write, so both are DB_OWNED.
+
+    Note this is for the privilege-gated *flag* gaps only — facts reflection can't
+    see without VIEW DEFINITION. An unknown *type* like VECTOR is handled the other
+    way, by registering it for reflection (app.mssql_types), not read here.
     """
     stmt = text("""
         SELECT s.name, t.name, c.name,
@@ -471,6 +513,46 @@ def _foreign_key_map(conn, schemas: list[str]) -> dict[tuple[str, str, str], tup
         (fk_schema, fk_table, fk_column): (ref_schema, ref_table, ref_column)
         for fk_schema, fk_table, fk_column, ref_schema, ref_table, ref_column in rows
     }
+
+
+def _check_constraints(
+    conn, schemas: list[str]
+) -> dict[tuple[str, str], dict[str, tuple[Optional[str], str]]]:
+    """
+    Reflect CHECK constraint definitions from sys.check_constraints.
+
+    SQLAlchemy's mssql dialect does NOT reflect CHECK constraints — metadata.reflect()
+    never attaches a CheckConstraint to table.constraints, and Inspector.
+    get_check_constraints() raises NotImplementedError — so the constraint text is
+    invisible through reflection. It IS available in the catalog, so it's read here
+    the same explicit-sys.* way as FK / history / computed metadata. This is what
+    lets a CHECK violation quote the actual rule (see errors.friendly_constraint_violation);
+    without it the app can only echo the constraint name.
+
+    definition is VIEW-DEFINITION-gated (the deployment grants it to the reflection
+    identity; SA/db_owner hold it inherently). Where it isn't held the column comes
+    back NULL, so those rows are filtered out and the error path degrades to naming
+    the rule rather than quoting it — never wrong, just less specific.
+
+    parent_column_id names the column for a column-level (single-column) check; a
+    table-level check reports column None and the caller recovers columns from the
+    definition text. Keyed by (schema, table) → { constraint_name: (column|None, definition) }.
+    """
+    stmt = text("""
+        SELECT s.name, t.name, cc.name,
+               COL_NAME(cc.parent_object_id, cc.parent_column_id) AS col_name,
+               cc.definition
+        FROM   sys.check_constraints cc
+        JOIN   sys.tables  t ON cc.parent_object_id = t.object_id
+        JOIN   sys.schemas s ON t.schema_id         = s.schema_id
+        WHERE  s.name IN :schemas
+          AND  cc.definition IS NOT NULL
+    """).bindparams(bindparam("schemas", expanding=True))
+
+    out: dict[tuple[str, str], dict[str, tuple[Optional[str], str]]] = {}
+    for sname, tname, cname, col_name, definition in conn.execute(stmt, {"schemas": schemas}):
+        out.setdefault((sname, tname), {})[cname] = (col_name, definition)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -707,6 +789,9 @@ def _build_column_info(
         name=col.name,
         kind=kind,
         python_type=_python_type(col),
+        # str(col.type) is correct for the app.mssql_types types too: they reflect
+        # as real named types now, so this reads "VECTOR"/"JSON"/"GEOGRAPHY"/…,
+        # not "NULL".
         sql_type=str(col.type),
         nullable=bool(col.nullable),
         is_primary_key=col.primary_key,
@@ -716,6 +801,7 @@ def _build_column_info(
         precision=getattr(col.type, "precision", None),
         scale=getattr(col.type, "scale", None),
         foreign_key=fk,
+        fetchable=not isinstance(col.type, _UNFETCHABLE_TYPES),
     )
 
 
@@ -726,9 +812,17 @@ def _build_table_info(
     fk_map: dict[tuple[str, str, str], tuple[str, str, str]],
     computed: frozenset[tuple[str, str, str]] = frozenset(),
     defaulted: frozenset[tuple[str, str, str]] = frozenset(),
+    check_constraints: dict[str, tuple[Optional[str], str]] | None = None,
 ) -> TableInfo:
     columns = [_build_column_info(c, generated_always, fk_map, computed, defaulted) for c in table.columns]
     pk_names = {c.name for c in table.primary_key.columns}
+
+    # CHECK constraints aren't reflected by the mssql dialect (see _check_constraints),
+    # so stash the catalog-sourced definitions on the SQLAlchemy Table's own `info`
+    # dict. The error layer reads them from there at violation time (errors.py) —
+    # keeping map_database_exception(exc, sa_table) able to quote the failed rule
+    # without any new parameter threading. Keyed constraint_name → (column|None, definition).
+    table.info["check_constraints"] = check_constraints or {}
 
     # Disable SQLAlchemy's implicit RETURNING (the OUTPUT clause) for this table.
     # SQL Server rejects an OUTPUT clause on any table that has a trigger
@@ -790,6 +884,7 @@ def reflect_schemas() -> ReflectedSchema:
         history_keys = _history_table_keys(conn, DB_SCHEMAS)
         flags        = _column_flags(conn, DB_SCHEMAS)
         fk_map       = _foreign_key_map(conn, DB_SCHEMAS)
+        check_map    = _check_constraints(conn, DB_SCHEMAS)
     finally:
         conn.close()
 
@@ -812,7 +907,8 @@ def reflect_schemas() -> ReflectedSchema:
             skipped_no_pk.append(f"{schema}.{table.name}")
             continue
         tables[(schema, table.name)] = _build_table_info(
-            schema, table, flags.generated_always, fk_map, flags.computed, flags.defaulted
+            schema, table, flags.generated_always, fk_map,
+            flags.computed, flags.defaulted, check_map.get((schema, table.name), {}),
         )
 
     if skipped_no_pk:
