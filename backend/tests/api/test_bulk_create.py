@@ -16,10 +16,10 @@ from sqlalchemy.dialects.mssql import INTEGER, NVARCHAR
 from sqlalchemy.pool import StaticPool
 
 from app import reflection
+from tests.conftest import pk_default_facts
 from app.dependencies import get_db, get_snapshot
-from app.errors import ErrorCode, _DEFAULT_MESSAGES
 from app.main import app
-from app.reflection import ReflectedSchema
+from app.reflection import SchemaSnapshot
 
 
 def _rows(client):
@@ -163,8 +163,8 @@ def uniq():
             {"ThingID": 3, "Code": 3},
         ])
 
-    info = reflection._build_table_info("dbo", thing, set(), {})
-    snapshot = ReflectedSchema(tables={info.key: info})
+    info = reflection._build_table_info(thing, pk_default_facts(thing), schema="dbo")
+    snapshot = SchemaSnapshot(tables={info.key: info})
 
     def _override_get_db():
         conn = engine.connect()
@@ -200,11 +200,9 @@ def test_constraint_violation_rolls_back_whole_import(uniq):
     assert body["row"] == 1
     assert _thing_total(uniq.client) == 3        # nothing imported
 
-    # Invariant: the user-facing message is the generic default (the route may
-    # prefix safe context like "Row N:") and leaks no SQL/schema detail — the
-    # underlying driver error is "UNIQUE constraint failed: Thing.Code", none of
-    # which may reach the client.
+    # The message carries the database's own error text, prefixed with the
+    # offending row — internal tool, so naming the constraint IS the feature
+    # (see errors.py). The route contributes only the row attribution.
     msg = body["message"]
-    assert _DEFAULT_MESSAGES[ErrorCode.CONSTRAINT_VIOLATION] in msg
-    for leak in ("Thing", "Code", "UNIQUE", "constraint", "UQ_Thing_Code"):
-        assert leak.lower() not in msg.lower()
+    assert msg.startswith("Row 2:")
+    assert "UNIQUE constraint failed" in msg

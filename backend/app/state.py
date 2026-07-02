@@ -4,7 +4,7 @@ current schema snapshot.
 
 The problem it solves
 ---------------------
-reflect_schemas() returns an immutable ReflectedSchema describing every
+reflect_schemas() returns an immutable SchemaSnapshot describing every
 table the app can see. The rest of the application needs to read from that
 snapshot on every request — but it also needs to be replaceable at runtime
 when an admin hits /admin/refresh after a schema change, without restarting
@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import logging
 
-from app.reflection import ReflectedSchema
+from app.reflection import SchemaSnapshot
 
 logger = logging.getLogger(__name__)
 
@@ -44,10 +44,10 @@ logger = logging.getLogger(__name__)
 # The one mutable reference. None until the first successful reflection at
 # startup. _current is module-private; all access goes through the two
 # functions below so the "atomic rebind" contract lives in exactly one place.
-_current: ReflectedSchema | None = None
+_current: SchemaSnapshot | None = None
 
 
-def set_snapshot(snapshot: ReflectedSchema) -> None:
+def set_snapshot(snapshot: SchemaSnapshot) -> None:
     """
     Install a new snapshot as the current one.
 
@@ -61,7 +61,7 @@ def set_snapshot(snapshot: ReflectedSchema) -> None:
     logger.info("Schema snapshot installed: %d table(s)", table_count)
 
 
-def get_snapshot() -> ReflectedSchema:
+def get_snapshot() -> SchemaSnapshot:
     """
     Return the current snapshot.
 

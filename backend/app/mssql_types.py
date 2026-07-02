@@ -17,22 +17,21 @@ That keeps the workaround for an unknown *type* confined to one type definition,
 rather than a catalog read threaded through classification. It's the right tool
 for the "new type" gap specifically; the privilege-gated *flag* gaps
 (is_computed / generated_always / default / FK) still need their sys.* reads —
-reflection structurally can't see those — see reflection._column_flags.
+reflection structurally can't see those — see reflection._catalog_facts.
 
 Two orthogonal facts a registered type still can't express, handled elsewhere:
 
   - Writability. VECTOR / GEOMETRY / GEOGRAPHY are structured-but-opaque and are
     kept out of write payloads (reflection._EXCLUDED_WRITE_TYPES); HIERARCHYID
     and JSON are plain strings that round-trip, so they stay EDITABLE.
-  - Fetchability. The CLR types (HIERARCHYID/GEOMETRY/GEOGRAPHY) can't be
-    materialised in a result row by pyodbc (ODBC type -151), independent of how
-    SQLAlchemy names them; reflection._UNFETCHABLE_TYPES flags them so the read
-    path CASTs them to text (routes/crud._read_columns).
+  - Readability. The CLR types (HIERARCHYID/GEOMETRY/GEOGRAPHY) come back from
+    the driver as raw CLR-internal bytes — useless through a JSON API — so
+    reflection flags them read_as_text and the read path CASTs them to WKT /
+    the path string (routes/crud._read_columns).
 
-Registration is idempotent and uses setdefault, so if a future SQLAlchemy ships
-native support for one of these names, the upstream mapping wins. `register()`
-runs on import; reflection imports the type from this module, so the entry is in
-place before the first metadata.reflect().
+Registration is idempotent (see register() for the setdefault-vs-assign split);
+it runs on import, and reflection imports these types from this module, so the
+entries are in place before the first metadata.reflect().
 """
 from __future__ import annotations
 
@@ -65,8 +64,8 @@ class VECTOR(UserDefinedType):
 class GEOMETRY(UserDefinedType):
     """
     The SQL Server GEOMETRY spatial CLR type. Structured-but-opaque, so it's
-    read-only (excluded from writes like XML). pyodbc can't fetch it raw
-    (ODBC -151); the read path CASTs it to its WKT text form.
+    read-only (excluded from writes like XML); the raw driver value is CLR
+    bytes, so the read path CASTs it to its WKT text form.
     """
 
     cache_ok = True
@@ -90,8 +89,8 @@ class HIERARCHYID(UserDefinedType):
 
     A path is a plain string that round-trips (SQL Server converts a string to
     hierarchyid on write and .ToString()s it back), so it stays EDITABLE. But,
-    like the spatial CLR types, pyodbc can't fetch it raw (ODBC -151), so the
-    read path CASTs it to its path string.
+    like the spatial CLR types, the raw driver value is CLR bytes, so the read
+    path CASTs it back to the path string.
     """
 
     cache_ok = True
@@ -105,8 +104,8 @@ class JSON(UserDefinedType):
     The SQL Server 2025 native JSON type.
 
     A JSON document is a string that round-trips (the engine accepts a JSON
-    string on write and returns one on read), so it stays EDITABLE and is
-    fetchable. Deliberately NOT the dialect's mssql.JSON (which would map to a
+    string on write and returns one on read), so it stays EDITABLE and reads
+    back as-is. Deliberately NOT the dialect's mssql.JSON (which would map to a
     Python dict and reject a top-level array/scalar); reflection maps this to a
     plain str, letting the client send any valid JSON document and the database
     validate it.
@@ -120,14 +119,20 @@ class JSON(UserDefinedType):
 
 def register() -> None:
     """
-    Teach the mssql dialect's reflection about these type names. Idempotent, and
-    setdefault so a future built-in mapping wins over ours if it ever lands.
+    Teach the mssql dialect's reflection about these type names. Idempotent.
+
+    The CLR/vector entries use setdefault — if SQLAlchemy ever ships native
+    support for them, the upstream mapping is a strict improvement and wins.
+    json is assigned unconditionally: a future upstream mapping would almost
+    certainly be the dialect's dict-based mssql.JSON, which rejects top-level
+    arrays/scalars — silently regressing the deliberate str semantics above —
+    so for that one name, this module's mapping wins.
     """
     MSDialect.ischema_names.setdefault("vector", VECTOR)
     MSDialect.ischema_names.setdefault("geometry", GEOMETRY)
     MSDialect.ischema_names.setdefault("geography", GEOGRAPHY)
     MSDialect.ischema_names.setdefault("hierarchyid", HIERARCHYID)
-    MSDialect.ischema_names.setdefault("json", JSON)
+    MSDialect.ischema_names["json"] = JSON
 
 
 register()

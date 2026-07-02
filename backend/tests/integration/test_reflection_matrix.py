@@ -59,18 +59,18 @@ def test_generated_always_period_columns_are_db_owned(snapshot):
 
 def test_identity_primary_key(snapshot):
     at = snapshot.get("dbo", "AllTypes")
-    assert at.primary_key == ["AllTypesID"]
+    assert at.primary_key == ("AllTypesID",)
     assert _col(at, "AllTypesID").kind is ColumnKind.DB_OWNED
     assert _col(at, "AllTypesID").is_primary_key is True
 
 
 def test_composite_primary_key_order(snapshot):
-    assert snapshot.get("dbo", "Composite").primary_key == ["OrgID", "TagID"]
+    assert snapshot.get("dbo", "Composite").primary_key == ("OrgID", "TagID")
 
 
 def test_manual_single_primary_key(snapshot):
     mk = snapshot.get("dbo", "ManualKey")
-    assert mk.primary_key == ["Code"]
+    assert mk.primary_key == ("Code",)
     assert _col(mk, "Label").required_on_create is True
 
 
@@ -197,7 +197,7 @@ def test_native_json_is_editable_string(snapshot):
     assert c.kind is ColumnKind.EDITABLE
     assert c.python_type is str
     assert c.sql_type == "JSON"      # registered type, not the dialect's "NULL"
-    assert c.fetchable is True
+    assert c.read_as_text is False
 
 
 def test_native_vector_is_excluded(snapshot):
@@ -215,27 +215,27 @@ def test_json_in_create_model_vector_not(snapshot):
 
 # ── CLR / spatial / sql_variant classification + fetchability ────────────────
 
-def test_spatial_types_excluded_and_unfetchable(snapshot):
+def test_spatial_types_excluded_and_read_as_text(snapshot):
     s = snapshot.get("dbo", "Spatial")
     for name, disp in [("Geo", "GEOGRAPHY"), ("Shape", "GEOMETRY")]:
         c = _col(s, name)
         assert c.kind is ColumnKind.EXCLUDED
         assert c.sql_type == disp
-        assert c.fetchable is False
+        assert c.read_as_text is True
 
 
-def test_hierarchyid_editable_but_unfetchable(snapshot):
+def test_hierarchyid_editable_but_read_as_text(snapshot):
     c = _col(snapshot.get("dbo", "Spatial"), "Node")
     assert c.kind is ColumnKind.EDITABLE       # a path string round-trips
     assert c.python_type is str
     assert c.sql_type == "HIERARCHYID"
-    assert c.fetchable is False                 # ...but pyodbc can't SELECT it raw
+    assert c.read_as_text is True               # raw driver value is CLR bytes; reads CAST to the path
 
 
-def test_sql_variant_excluded_and_unfetchable(snapshot):
+def test_sql_variant_excluded_and_read_as_text(snapshot):
     c = _col(snapshot.get("dbo", "Spatial"), "Variant")
     assert c.kind is ColumnKind.EXCLUDED
-    assert c.fetchable is False
+    assert c.read_as_text is True
 
 
 def test_spatial_create_model_only_has_editable_columns(snapshot):
@@ -312,14 +312,46 @@ def test_sequence_default_is_editable_and_optional(snapshot):
     assert c.required_on_create is False
 
 
+# ── MS_Description comments surface on ColumnInfo ────────────────────────────
+
+def test_ms_description_reflected_as_comment(snapshot):
+    # sys.extended_properties MS_Description is reflected by the dialect into
+    # col.comment and carried on ColumnInfo — visible at every privilege level
+    # (both identities of this matrix run), no VIEW DEFINITION involved.
+    legacy = snapshot.get("dbo", "Legacy")
+    assert _col(legacy, "Label").comment == "Free-text label shown to operators"
+    assert _col(legacy, "ColText").comment is None
+
+
+# ── Reflection-time policy: searchable / filterable / read_as_text ───────────
+
+def test_policy_flags_on_real_reflected_columns(snapshot):
+    at = snapshot.get("dbo", "AllTypes")
+    # Free-text search: real string columns only.
+    assert _col(at, "ColNVarchar").searchable is True
+    assert _col(at, "ColXml").searchable is False       # LIKE on xml → error 8116
+    assert _col(at, "ColJson").searchable is False
+    assert _col(at, "ColInt").searchable is False
+    # Value filters: comparable types only.
+    assert _col(at, "ColInt").filterable is True
+    assert _col(at, "ColUniqueId").filterable is True
+    assert _col(at, "ColXml").filterable is False
+    assert _col(at, "ColVarbinary").filterable is False
+    assert _col(at, "ColRowversion").filterable is False
+    # Read CASTs: CLR bytes + sql_variant only.
+    assert _col(at, "ColHierarchy").read_as_text is True
+    assert _col(at, "ColSqlVariant").read_as_text is True
+    assert _col(at, "ColJson").read_as_text is False
+    assert _col(at, "ColVector").read_as_text is False
+
+
 # ── Manual single-column INTEGER primary key ─────────────────────────────────
-# Reflected mssql columns carry autoincrement=True/False (never "auto"), so a
-# manual int PK stays in the create model and is required. A hand-built Table
-# of the same shape reports autoincrement="auto" and would be excluded — this
-# pin exists precisely because unit-test tables diverge from live reflection.
+# Reflected mssql columns carry autoincrement=True/False (never "auto") and a
+# manual int PK has neither identity nor a default, so it stays in the create
+# model, required — pinned against a real database.
 
 def test_manual_int_pk_is_client_suppliable_and_required(snapshot):
     mk = snapshot.get("dbo", "ManualIntKey")
-    assert mk.primary_key == ["IntCode"]
+    assert mk.primary_key == ("IntCode",)
     assert "IntCode" in mk.create_model.model_fields
     assert mk.create_model.model_fields["IntCode"].is_required()
