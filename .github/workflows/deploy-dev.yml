@@ -7,6 +7,13 @@ name: Deploy · dev
 on:
   push:
     branches: [main]
+    # Docs-only changes (README, docs/, database/) don't affect the running
+    # application. Skip the full build+deploy cycle here as ci.yml already
+    # skips the suite for docs-only PRs.
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "database/**"
   # Manual redeploy / rollback: supply a full image ref already in ACR
   # (registry/autocrud@sha256:...) to repoint dev at it without rebuilding.
   # Blank = build + deploy HEAD.
