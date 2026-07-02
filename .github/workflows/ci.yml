@@ -12,6 +12,12 @@ on:
   pull_request:
     branches: [main]
   workflow_call:
+    inputs:
+      is_deploy_gate:
+        description: Set to true when called as a deploy gate to skip the docker-build check (image.yml builds the real image immediately after).
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -276,11 +282,11 @@ jobs:
   docker-build:
     name: Docker · build check
     needs: changes
-    # Skip on workflow_call (deploy gate): image.yml builds+pushes immediately after
+    # Skip when called as a deploy gate: image.yml builds+pushes immediately after
     # CI passes, which already validates the Dockerfile. Running it twice — once here
     # with GHA cache + no push, once in image.yml with ACR registry cache + push —
     # wastes a runner on a 100%-cached no-op. PRs still get the check.
-    if: needs.changes.outputs.docker == 'true' && github.event_name != 'workflow_call'
+    if: needs.changes.outputs.docker == 'true' && !inputs.is_deploy_gate
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
