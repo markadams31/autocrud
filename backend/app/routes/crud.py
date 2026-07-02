@@ -1032,6 +1032,15 @@ def bulk_delete_rows(
     BULK_MAX_ROWS to bound the size of the single transaction; a request over
     the cap is refused with BAD_REQUEST rather than silently truncated or split
     (splitting would break the all-or-nothing guarantee).
+
+    Concurrency: unlike the single-row delete, a bulk delete does NOT require or
+    check If-Match, even on a rowversion table — this is intentional, not an
+    oversight. Rowversion guards a stale read-modify-write (a form loaded at v1
+    overwriting someone's v2); a bulk delete is neither — "all matching"
+    re-evaluates the current set server-side at execution, and an explicit id
+    list is a deliberate mass action. Requiring a per-row token would fail the
+    whole batch because one unrelated row moved, for no real safety gain. Bulk
+    writes are last-writer-wins by design.
     """
     user = _user_from_request(request)
     t    = table.sa_table
@@ -1078,6 +1087,13 @@ def bulk_update_rows(
     VALIDATION_ERROR before the database is touched). Targeting matches
     bulk-delete: an explicit `ids` list or "all matching" the search/filters,
     both capped at BULK_MAX_ROWS and refused (changing nothing) when over.
+
+    Concurrency: like bulk-delete, this does NOT require or check If-Match even
+    on a rowversion table — intentionally last-writer-wins. A bulk update is a
+    deliberate "set these columns on this set" mass action, not the stale
+    read-modify-write that rowversion exists to guard; forcing a per-row token
+    would fail the whole batch on one unrelated concurrent change. See
+    bulk_delete_rows for the full rationale.
     """
     user = _user_from_request(request)
     t    = table.sa_table
