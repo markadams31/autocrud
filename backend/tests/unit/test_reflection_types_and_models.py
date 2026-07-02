@@ -33,6 +33,7 @@ from app.reflection import (
     _is_auto_generated_pk,
     _is_required_on_create,
     _python_type,
+    _utf16_len,
 )
 
 NO_FACTS = ColumnFacts()
@@ -330,6 +331,30 @@ def test_create_model_enforces_max_length():
     created, _ = _models(table, facts)
     with pytest.raises(Exception):  # pydantic ValidationError
         created(Name="x" * 51)
+
+
+@pytest.mark.parametrize("text, units", [
+    ("", 0),
+    ("abc", 3),
+    ("café", 4),        # é is BMP → 1 unit
+    ("日本語", 3),       # CJK is BMP → 1 unit each
+    ("📊", 2),           # supplementary plane → surrogate pair → 2 units
+    ("a📊b", 4),
+])
+def test_utf16_len_counts_surrogate_pairs(text, units):
+    assert _utf16_len(text) == units
+
+
+def test_create_model_max_length_counts_utf16_units():
+    # An emoji is one Python code point but two UTF-16 units — the unit
+    # NVARCHAR(50) counts. 26 emoji (52 units) must be rejected even though
+    # len() is 26; 25 emoji (exactly 50 units) is at the limit and allowed.
+    # Previously the string slipped past validation and failed as a DB truncation.
+    table, facts = _employee()
+    created, _ = _models(table, facts)
+    with pytest.raises(Exception):  # pydantic ValidationError
+        created(Name="📊" * 26)
+    created(Name="📊" * 25)
 
 
 def test_update_model_all_fields_optional_and_no_pk():

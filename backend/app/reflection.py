@@ -94,7 +94,7 @@ from enum import Enum, auto
 from functools import cached_property
 from typing import Annotated, NamedTuple, Optional
 
-from pydantic import BaseModel, Field, create_model
+from pydantic import AfterValidator, BaseModel, create_model
 from sqlalchemy import MetaData, Table, bindparam, text
 from sqlalchemy.sql.schema import Column
 from sqlalchemy.dialects.mssql import (
@@ -480,15 +480,40 @@ class SchemaSnapshot:
 # Pydantic model generation
 # ---------------------------------------------------------------------------
 
+def _utf16_len(value: str) -> int:
+    """
+    Length of a string in UTF-16 code units — the unit SQL Server's NVARCHAR(n)
+    counts. A supplementary-plane character (codepoint > U+FFFF, e.g. an emoji)
+    is stored as a surrogate pair and so occupies two units, where Python's len()
+    counts it as one. Measuring in the wrong unit is what let an over-long emoji
+    string slip past validation into a database truncation error.
+    """
+    return sum(2 if ord(ch) > 0xFFFF else 1 for ch in value)
+
+
+def _max_length_validator(limit: int):
+    """A Pydantic validator enforcing an NVARCHAR(limit) length in UTF-16 units."""
+    def check(value: str) -> str:
+        if _utf16_len(value) > limit:
+            raise ValueError(f"String should have at most {limit} characters")
+        return value
+    return check
+
+
 def _annotation(info: ColumnInfo):
     """
     Field annotation for a column. Max length is enforced at validation time
     (with per-field detail) rather than round-tripping to the database as a
     truncation error; everything semantic — precision, CHECK rules, FK
     existence — is left to the database, which stays the source of truth.
+
+    Length is measured in UTF-16 code units, matching NVARCHAR(n): Pydantic's
+    own max_length counts Python code points, so a supplementary-plane character
+    (an emoji is one code point but two UTF-16 units) would otherwise pass
+    validation and fail as a database truncation instead — see _utf16_len.
     """
     if info.python_type is str and info.max_length:
-        return Annotated[str, Field(max_length=info.max_length)]
+        return Annotated[str, AfterValidator(_max_length_validator(info.max_length))]
     return info.python_type
 
 

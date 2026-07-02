@@ -41,8 +41,10 @@ formats. Only the CODE is derived, and from two robust signals:
                                option.
 
 Anything unrecognised is INTERNAL_ERROR (500): an unattributed
-ProgrammingError means our generated SQL is malformed — a bug, not a client
-or permission problem.
+ProgrammingError most likely means our generated SQL is malformed — a bug, not
+a client or permission problem — so it stays a loud 500. Its `message` is still
+the database's own text (like the 4xx DB errors above), so an unmapped fault is
+legible to the user, not just the server log.
 """
 
 from __future__ import annotations
@@ -219,6 +221,12 @@ def map_database_exception(exc: Exception) -> ApiError:
         # full text is logged by the caller.
         return ApiError(ErrorCode.DATABASE_UNAVAILABLE)
 
-    # An unattributed ProgrammingError means our generated SQL is malformed —
-    # a bug, not a client or permission problem — so it surfaces as internal.
-    return ApiError(ErrorCode.INTERNAL_ERROR)
+    # An unrecognised database error is most likely our generated SQL being
+    # malformed — a bug, not a client or permission problem — so it stays a 500
+    # (kept loud and distinct from the 4xx client errors). But we surface the
+    # database's own text rather than the generic message: this is an internal
+    # tool, and hiding it only sent the actual fault to the server log while the
+    # user saw "Something went wrong". Passing it through means an unmapped but
+    # genuinely client-caused error (e.g. an operator SQL Server rejects on a
+    # given column type) is at least legible instead of opaque.
+    return ApiError(ErrorCode.INTERNAL_ERROR, text)
