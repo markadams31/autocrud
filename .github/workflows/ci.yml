@@ -123,6 +123,7 @@ jobs:
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
         with:
           enable-cache: true
+          version: "0.11.26"  # keep in sync with Dockerfile's ghcr.io/astral-sh/uv image tag
       - name: Install dependencies
         run: uv sync --extra test
       # Tiers 1 & 2 run on SQLite with the dependencies overridden — no Docker,
@@ -147,6 +148,7 @@ jobs:
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
         with:
           enable-cache: true
+          version: "0.11.26"  # keep in sync with Dockerfile's ghcr.io/astral-sh/uv image tag
       - name: Install dependencies
         run: uv sync --extra test
       # Run pyright through uv so it type-checks against the app's real
@@ -186,6 +188,7 @@ jobs:
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
         with:
           enable-cache: true
+          version: "0.11.26"  # keep in sync with Dockerfile's ghcr.io/astral-sh/uv image tag
       - name: Run integration tier
         working-directory: backend
         env:
@@ -273,7 +276,11 @@ jobs:
   docker-build:
     name: Docker · build check
     needs: changes
-    if: needs.changes.outputs.docker == 'true'
+    # Skip on workflow_call (deploy gate): image.yml builds+pushes immediately after
+    # CI passes, which already validates the Dockerfile. Running it twice — once here
+    # with GHA cache + no push, once in image.yml with ACR registry cache + push —
+    # wastes a runner on a 100%-cached no-op. PRs still get the check.
+    if: needs.changes.outputs.docker == 'true' && github.event_name != 'workflow_call'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -297,6 +304,8 @@ jobs:
     if: needs.changes.outputs.infra == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      TF_PLUGIN_CACHE_DIR: ${{ github.workspace }}/.terraform.d/plugin-cache
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -305,6 +314,15 @@ jobs:
         with:
           terraform_version: 1.9.8
           terraform_wrapper: false
+      # Provider binaries shared across all three init calls. Keyed to the lock
+      # files so the cache invalidates exactly when providers change.
+      - name: Create Terraform plugin cache dir
+        run: mkdir -p "$TF_PLUGIN_CACHE_DIR"
+      - name: Restore Terraform provider cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.TF_PLUGIN_CACHE_DIR }}
+          key: terraform-providers-${{ runner.os }}-${{ hashFiles('infra/**/.terraform.lock.hcl') }}
       - name: Format check
         working-directory: infra
         run: terraform fmt -check -recursive
