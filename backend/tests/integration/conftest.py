@@ -27,6 +27,11 @@ from testcontainers.core.wait_strategies import LogMessageWaitStrategy  # noqa: 
 from sqlalchemy import create_engine  # noqa: E402
 
 SA_PASSWORD = "Str0ng_Passw0rd!"
+# The least-privilege reflection login created by schema.sql: VIEW DEFINITION
+# only, no data-reading role. The reflection matrix re-runs under it to prove
+# parity with sa (see the `snapshot` fixture below).
+VDONLY_USER = "reflect_vdonly"
+VDONLY_PASSWORD = "Int3gration_VD!only"
 # SQL Server 2025: the schema fixture exercises the native json and vector types
 # introduced there (see schema.sql), which earlier images reject at CREATE TABLE.
 IMAGE = "mcr.microsoft.com/mssql/server:2025-latest"
@@ -45,16 +50,20 @@ def _odbc_driver() -> str:
     pytest.skip(f"No SQL Server ODBC driver installed (have: {drivers})")
 
 
-def _odbc_dsn(driver: str, host: str, port: str, database: str) -> str:
+def _odbc_dsn(
+    driver: str, host: str, port: str, database: str,
+    uid: str = "sa", pwd: str = SA_PASSWORD,
+) -> str:
     return (
         f"DRIVER={{{driver}}};SERVER={host},{port};DATABASE={database};"
-        f"UID=sa;PWD={SA_PASSWORD};Encrypt=no;TrustServerCertificate=yes;"
+        f"UID={uid};PWD={pwd};Encrypt=no;TrustServerCertificate=yes;"
     )
 
 
-def _engine(driver: str, host: str, port: str, database: str):
+def _engine(driver: str, host: str, port: str, database: str, uid: str = "sa", pwd: str = SA_PASSWORD):
     return create_engine(
-        "mssql+pyodbc:///?odbc_connect=" + urllib.parse.quote_plus(_odbc_dsn(driver, host, port, database))
+        "mssql+pyodbc:///?odbc_connect="
+        + urllib.parse.quote_plus(_odbc_dsn(driver, host, port, database, uid, pwd))
     )
 
 
@@ -68,8 +77,8 @@ def _run_sql_script(pyodbc_conn, sql: str) -> None:
 
 
 @pytest.fixture(scope="session")
-def mssql_engine():
-    """Start SQL Server, create the test DB, load schema.sql, yield an Engine."""
+def mssql_server():
+    """Start SQL Server, create the test DB, load schema.sql, yield (driver, host, port)."""
     import pyodbc
 
     # Fast, OS-enforced readiness check first. A half-started Docker daemon can
@@ -154,30 +163,73 @@ def mssql_engine():
         with db_conn:
             _run_sql_script(db_conn, schema_sql)
 
-        engine = _engine(driver, host, port, TEST_DB)
-        try:
-            yield engine
-        finally:
-            engine.dispose()
+        yield driver, host, port
     finally:
         container.stop()
 
 
 @pytest.fixture(scope="session")
-def reflected(mssql_engine):
-    """Reflect the comprehensive schema using the production reflect_schemas()."""
+def mssql_engine(mssql_server):
+    """sa-authenticated Engine against the test database."""
+    driver, host, port = mssql_server
+    engine = _engine(driver, host, port, TEST_DB)
+    try:
+        yield engine
+    finally:
+        engine.dispose()
+
+
+@pytest.fixture(scope="session")
+def vdonly_engine(mssql_server):
+    """
+    Engine authenticated as the least-privilege reflection login: VIEW DEFINITION
+    only, no data access. This is the identity the production reflection engine
+    should run as — reflection reads metadata, never rows.
+    """
+    driver, host, port = mssql_server
+    engine = _engine(driver, host, port, TEST_DB, uid=VDONLY_USER, pwd=VDONLY_PASSWORD)
+    try:
+        yield engine
+    finally:
+        engine.dispose()
+
+
+def _reflect_schemas_with(engine):
+    """Run the production reflect_schemas() against the given engine."""
     from app import reflection
 
     saved_engine = reflection.reflection_engine
     saved_schemas = reflection.DB_SCHEMAS
-    reflection.reflection_engine = mssql_engine
+    reflection.reflection_engine = engine
     reflection.DB_SCHEMAS = ["dbo", "app2"]
     try:
-        snapshot = reflection.reflect_schemas()
+        return reflection.reflect_schemas()
     finally:
         reflection.reflection_engine = saved_engine
         reflection.DB_SCHEMAS = saved_schemas
-    return snapshot
+
+
+@pytest.fixture(scope="session")
+def reflected(mssql_engine):
+    """Snapshot reflected as sa — the baseline, also used by the CRUD round-trips."""
+    return _reflect_schemas_with(mssql_engine)
+
+
+@pytest.fixture(scope="session")
+def reflected_vdonly(vdonly_engine):
+    """Snapshot reflected as the VIEW-DEFINITION-only login."""
+    return _reflect_schemas_with(vdonly_engine)
+
+
+@pytest.fixture(scope="session", params=["sa", "vdonly"])
+def snapshot(request, reflected, reflected_vdonly):
+    """
+    The reflection matrix runs once per identity: sa and the least-privilege
+    VIEW-DEFINITION-only login. Both must produce identical classification —
+    that parity is the module's core promise, asserted per-scenario here and
+    wholesale in test_reflection_golden.
+    """
+    return reflected if request.param == "sa" else reflected_vdonly
 
 
 @pytest.fixture
