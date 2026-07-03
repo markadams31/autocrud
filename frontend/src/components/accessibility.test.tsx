@@ -98,7 +98,7 @@ describe('axe — no WCAG A/AA violations', () => {
           columns={COLUMNS}
           rows={ROWS}
           fkLabels={NO_FK_LABELS}
-          sort={{ column: '', direction: 'asc' }}
+          sort={[]}
           onSort={() => {}}
           loading={false}
           permissions={ALL_PERMS}
@@ -175,7 +175,7 @@ describe('keyboard-reachable row detail', () => {
           columns={COLUMNS}
           rows={ROWS}
           fkLabels={NO_FK_LABELS}
-          sort={{ column: '', direction: 'asc' }}
+          sort={[]}
           onSort={() => {}}
           loading={false}
           permissions={{ insert: false, update: false, delete: false }}

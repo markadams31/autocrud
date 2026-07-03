@@ -141,6 +141,12 @@ export type Row = Record<string, unknown>
 
 export type SortDirection = 'asc' | 'desc'
 
+/** One sort key — a column name plus direction. Sent as an ordered array in QueryRequest. */
+export interface SortSpec {
+  column: string
+  direction: SortDirection
+}
+
 /**
  * Filter operators understood by the backend (crud.py::_filter_clause).
  * `isnull`/`notnull` take no value; `between` takes a [low, high] pair;
@@ -171,7 +177,7 @@ export interface FilterSpec {
 export interface QueryRequest {
   search: string
   filters: Record<string, FilterSpec>
-  sort: { column: string; direction: SortDirection }
+  sort: SortSpec[]
   page: number
   page_size: number
 }

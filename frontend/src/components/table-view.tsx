@@ -26,6 +26,7 @@ import { AnimatedNumber } from '@/components/animated-number'
 import { BulkActionBar } from '@/components/bulk-action-bar'
 import { BulkEditForm, BULK_EDIT_TITLE_ID } from '@/components/bulk-edit-form'
 import { DataTable } from '@/components/data-table'
+import { ViewsBar } from '@/components/views-bar'
 import { DeleteDialog } from '@/components/delete-dialog'
 import { ImportDialog } from '@/components/import-dialog'
 import { FilterBar } from '@/components/filter-bar'
@@ -56,7 +57,14 @@ import {
 } from '@/hooks/queries'
 import { useUndoableDelete } from '@/hooks/use-undoable-delete'
 import { useDebouncedValue } from '@/hooks/use-debounced-value'
-import { useDensity, useHiddenColumns } from '@/hooks/use-table-prefs'
+import {
+  useDensity,
+  useHiddenColumns,
+  useColumnOrder,
+  useColumnWidths,
+  useSavedViews,
+  type SavedView,
+} from '@/hooks/use-table-prefs'
 import { useRowSelection } from '@/hooks/use-row-selection'
 import { useCsvExport } from '@/hooks/use-csv-export'
 import {
@@ -74,10 +82,30 @@ import type {
   FilterSpec,
   QueryRequest,
   Row,
+  SortSpec,
   TablePermissions,
 } from '@/types'
 
 const NO_PERMISSIONS: TablePermissions = { insert: false, update: false, delete: false }
+
+/** Apply a saved column order to a visible-columns list. Unordered columns go last. */
+function applyColumnOrder(cols: ColumnMeta[], order: string[]): ColumnMeta[] {
+  if (!order.length) return cols
+  const byName = new Map(cols.map((c) => [c.name, c]))
+  const placed = new Set<string>()
+  const ordered: ColumnMeta[] = []
+  for (const name of order) {
+    const col = byName.get(name)
+    if (col) {
+      ordered.push(col)
+      placed.add(name)
+    }
+  }
+  for (const col of cols) {
+    if (!placed.has(col.name)) ordered.push(col)
+  }
+  return ordered
+}
 
 // Operators whose value is matched as text (kept as-is); the rest are coerced
 // to the column's JSON type before being sent to the API.
@@ -162,6 +190,10 @@ export function TableView({ schema, table, url }: TableViewProps) {
     reset: resetColumns,
     replace: replaceHiddenColumns,
   } = useHiddenColumns(schema, table)
+  const { columnOrder, setColumnOrder, resetColumnOrder } = useColumnOrder(schema, table)
+  const { columnWidths, setColumnWidth } = useColumnWidths(schema, table)
+  const { views, saveView, deleteView } = useSavedViews(schema, table)
+  const [activeViewId, setActiveViewId] = useState<string | null>(null)
 
   const metaQuery = useTableMeta(schema, table)
   const meta = metaQuery.data
@@ -173,7 +205,15 @@ export function TableView({ schema, table, url }: TableViewProps) {
     tablesQuery.data?.find((t) => t.name === table)?.permissions ?? NO_PERMISSIONS
 
   const columns = meta?.columns ?? []
-  const visibleColumns = columns.filter((c) => !hidden.has(c.name))
+  const baseVisibleColumns = columns.filter((c) => !hidden.has(c.name))
+  const visibleColumns = applyColumnOrder(baseVisibleColumns, columnOrder)
+
+  // A column order is non-default only when the effective display sequence
+  // actually differs from the schema-reflected order (e.g. a stored order
+  // that happens to match the default is not worth saving as a view).
+  const columnOrderIsDefault = visibleColumns.every(
+    (c, i) => baseVisibleColumns[i]?.name === c.name,
+  )
 
   const request: QueryRequest = {
     search: debouncedSearch,
@@ -258,13 +298,97 @@ export function TableView({ schema, table, url }: TableViewProps) {
     replaceHiddenColumns(next)
   }
 
-  function handleSort(column: string) {
-    url.setSort(
-      url.sort.column === column
-        ? { column, direction: url.sort.direction === 'asc' ? 'desc' : 'asc' }
-        : { column, direction: 'asc' },
-    )
+  function handleSort(column: string, additive: boolean) {
+    const sorts = url.sort
+    const idx = sorts.findIndex((s) => s.column === column)
+    let next: SortSpec[]
+
+    if (additive) {
+      // Shift+click: add secondary key, toggle direction, or remove the key.
+      if (idx >= 0) {
+        const current = sorts[idx]
+        if (current.direction === 'desc') {
+          // Third Shift+click: remove this column from the sort.
+          next = sorts.filter((_, i) => i !== idx)
+        } else {
+          const updated = [...sorts]
+          updated[idx] = { column, direction: 'desc' }
+          next = updated
+        }
+      } else {
+        next = [...sorts, { column, direction: 'asc' }]
+      }
+    } else {
+      // Plain click: single-column sort, toggle direction if already primary.
+      if (idx === 0 && sorts.length === 1) {
+        next = [{ column, direction: sorts[0].direction === 'asc' ? 'desc' : 'asc' }]
+      } else {
+        next = [{ column, direction: 'asc' }]
+      }
+    }
+
+    console.log('[sort]', JSON.stringify(next))
+    url.setSort(next)
+    setActiveViewId(null)
   }
+
+  function handleColumnReorder(from: string, to: string) {
+    const names = visibleColumns.map((c) => c.name)
+    const fromIdx = names.indexOf(from)
+    const toIdx = names.indexOf(to)
+    if (fromIdx === -1 || toIdx === -1 || fromIdx === toIdx) return
+    const next = [...names]
+    next.splice(fromIdx, 1)
+    next.splice(toIdx, 0, from)
+    // Persist the full column order (including hidden ones) by merging into the
+    // base column list order so non-visible columns keep their relative position.
+    const allNames = columns.map((c) => c.name)
+    const hidden_ = new Set(hidden)
+    const merged: string[] = []
+    let visIdx = 0
+    for (const name of allNames) {
+      if (hidden_.has(name)) {
+        merged.push(name)
+      } else {
+        merged.push(next[visIdx++])
+      }
+    }
+    setColumnOrder(merged)
+    console.log('[column-order]', JSON.stringify(merged))
+  }
+
+  function handleApplyView(view: SavedView | null) {
+    if (!view) {
+      url.setView({}, [])
+      replaceHiddenColumns(new Set())
+      resetColumnOrder()
+      setActiveViewId(null)
+    } else {
+      url.setView(view.filters, view.sort)
+      replaceHiddenColumns(new Set(view.hiddenColumns))
+      setColumnOrder(view.columnOrder)
+      setActiveViewId(view.id)
+    }
+  }
+
+  function handleSaveView(name: string) {
+    const newView = saveView({
+      name,
+      filters: url.filters,
+      sort: url.sort,
+      hiddenColumns: [...hidden],
+      columnOrder,
+    })
+    setActiveViewId(newView.id)
+  }
+
+  // The "Save view" affordance appears when the current state differs from
+  // the empty default so there's something non-trivial worth naming.
+  const hasNonDefaultState =
+    url.sort.length > 0 ||
+    Object.keys(url.filters).length > 0 ||
+    hidden.size > 0 ||
+    !columnOrderIsDefault
 
   function rowLabel(row: Row): string {
     const display = meta?.display_column
@@ -418,6 +542,20 @@ export function TableView({ schema, table, url }: TableViewProps) {
         </div>
       </div>
 
+      {/* Saved views */}
+      <ViewsBar
+        views={views}
+        activeViewId={activeViewId}
+        isAllActive={!hasNonDefaultState}
+        canSave={hasNonDefaultState}
+        onSelect={handleApplyView}
+        onSave={handleSaveView}
+        onDelete={(id) => {
+          if (id === activeViewId) setActiveViewId(null)
+          deleteView(id)
+        }}
+      />
+
       {/* Toolbar */}
       <TableToolbar
         search={url.search}
@@ -497,7 +635,10 @@ export function TableView({ schema, table, url }: TableViewProps) {
         <FilterBar
           columns={columns}
           filters={url.filters}
-          onChange={url.setFilters}
+          onChange={(next) => {
+            url.setFilters(next)
+            setActiveViewId(null)
+          }}
           schema={schema}
           table={table}
         />
@@ -590,6 +731,9 @@ export function TableView({ schema, table, url }: TableViewProps) {
             schema={schema}
             table={table}
             onCellEdit={permissions.update ? handleCellEdit : undefined}
+            columnWidths={columnWidths}
+            onColumnResize={setColumnWidth}
+            onColumnReorder={handleColumnReorder}
             selection={
               canSelect
                 ? {

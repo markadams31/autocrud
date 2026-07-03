@@ -213,10 +213,24 @@ def test_query_filter_incomplete_is_ignored(populated):
 def test_query_sort_descending(populated):
     resp = populated.client.post(
         "/api/dbo/Widget/query",
-        json={"sort": {"column": "Quantity", "direction": "desc"}, "page_size": 3},
+        json={"sort": [{"column": "Quantity", "direction": "desc"}], "page_size": 3},
     )
     quantities = [r["Quantity"] for r in resp.json()["data"]]
     assert quantities == [25, 24, 23]
+
+
+def test_query_sort_multi_column(populated):
+    # Multi-column sort: primary sort by Name desc, secondary by Quantity asc.
+    # With 25 items named "Item-1" through "Item-25", all names are distinct so
+    # only the first sort key is exercised — but the request must succeed and
+    # the first column must be respected.
+    resp = populated.client.post(
+        "/api/dbo/Widget/query",
+        json={"sort": [{"column": "Name", "direction": "desc"}, {"column": "Quantity", "direction": "asc"}], "page_size": 3},
+    )
+    assert resp.status_code == 200
+    names = [r["Name"] for r in resp.json()["data"]]
+    assert names == sorted(names, reverse=True)
 
 
 # ── Query: pagination boundaries ─────────────────────────────────────────────
@@ -301,7 +315,7 @@ def test_query_reports_all_bad_filters_in_one_pass(populated):
 
 def test_query_unknown_sort_column_is_rejected(populated):
     resp = populated.client.post(
-        "/api/dbo/Widget/query", json={"sort": {"column": "Nope", "direction": "asc"}}
+        "/api/dbo/Widget/query", json={"sort": [{"column": "Nope", "direction": "asc"}]}
     )
     assert resp.status_code == 422
     assert "sort" in resp.json()["fields"]
@@ -310,7 +324,7 @@ def test_query_unknown_sort_column_is_rejected(populated):
 def test_query_invalid_sort_direction_is_rejected(populated):
     resp = populated.client.post(
         "/api/dbo/Widget/query",
-        json={"sort": {"column": "Quantity", "direction": "sideways"}},
+        json={"sort": [{"column": "Quantity", "direction": "sideways"}]},
     )
     assert resp.status_code == 422
     assert "sort" in resp.json()["fields"]

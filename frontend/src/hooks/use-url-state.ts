@@ -15,7 +15,7 @@
 
 import { useEffect, useState } from 'react'
 
-import type { FilterOp, SortDirection } from '@/types'
+import type { FilterOp, SortDirection, SortSpec } from '@/types'
 
 export interface Selection {
   schema: string | null
@@ -60,16 +60,14 @@ function encodeFilter(f: ColumnFilter): string | null {
   return `${f.op}:${f.value}`
 }
 
-export interface ViewSort {
-  column: string
-  direction: SortDirection
-}
+/** Re-export so callers can import ViewSort from here (backwards compat). */
+export type ViewSort = SortSpec
 
 export interface ViewState {
   schema: string | null
   table: string | null
   search: string
-  sort: ViewSort
+  sort: SortSpec[]
   page: number
   pageSize: number
   /** column name → operator + raw value; coerced to the column's type before query. */
@@ -79,10 +77,12 @@ export interface ViewState {
 export interface UrlController extends ViewState {
   selectTable: (schema: string, table: string) => void
   setSearch: (search: string) => void
-  setSort: (sort: ViewSort) => void
+  setSort: (sort: SortSpec[]) => void
   setPage: (page: number) => void
   setPageSize: (pageSize: number) => void
   setFilters: (filters: Record<string, ColumnFilter>) => void
+  /** Atomically apply a saved view (filters + sort) in one history entry. */
+  setView: (filters: Record<string, ColumnFilter>, sort: SortSpec[]) => void
 }
 
 export const DEFAULT_PAGE_SIZE = 50
@@ -94,12 +94,23 @@ function readState(): ViewState {
   for (const [key, value] of p.entries()) {
     if (key.startsWith('f.') && key.length > 2) filters[key.slice(2)] = parseFilter(value)
   }
-  const [column = '', direction = 'asc'] = (p.get('sort') ?? '').split(':')
+  // Multi-sort encoded as comma-separated "Col:dir" pairs, e.g. "Name:asc,Due:desc".
+  const sortParam = p.get('sort') ?? ''
+  const sort: SortSpec[] = sortParam
+    ? sortParam
+        .split(',')
+        .map((s) => {
+          const [column = '', dir = ''] = s.split(':')
+          const direction: SortDirection = dir === 'desc' ? 'desc' : 'asc'
+          return { column, direction }
+        })
+        .filter((s) => s.column)
+    : []
   return {
     schema: p.get('schema'),
     table: p.get('table'),
     search: p.get('q') ?? '',
-    sort: { column, direction: direction === 'desc' ? 'desc' : 'asc' },
+    sort,
     page: Math.max(1, Number(p.get('page')) || 1),
     pageSize: Number(p.get('size')) || DEFAULT_PAGE_SIZE,
     filters,
@@ -111,7 +122,9 @@ function toQueryString(state: ViewState): string {
   if (state.schema) p.set('schema', state.schema)
   if (state.table) p.set('table', state.table)
   if (state.search) p.set('q', state.search)
-  if (state.sort.column) p.set('sort', `${state.sort.column}:${state.sort.direction}`)
+  if (state.sort.length) {
+    p.set('sort', state.sort.map((s) => `${s.column}:${s.direction}`).join(','))
+  }
   if (state.page > 1) p.set('page', String(state.page))
   if (state.pageSize !== DEFAULT_PAGE_SIZE) p.set('size', String(state.pageSize))
   for (const [column, filter] of Object.entries(state.filters)) {
@@ -147,7 +160,7 @@ export function useUrlState(): UrlController {
           schema,
           table,
           search: '',
-          sort: { column: '', direction: 'asc' },
+          sort: [],
           page: 1,
           pageSize: state.pageSize, // keep page-size preference across tables
           filters: {},
@@ -159,5 +172,6 @@ export function useUrlState(): UrlController {
     setPage: (page) => commit({ ...state, page }),
     setPageSize: (pageSize) => commit({ ...state, pageSize, page: 1 }),
     setFilters: (filters) => commit({ ...state, filters, page: 1 }),
+    setView: (filters, sort) => commit({ ...state, filters, sort, page: 1 }),
   }
 }
