@@ -550,7 +550,10 @@ export function TableView({ schema, table, url }: TableViewProps) {
         canSave={hasNonDefaultState}
         onSelect={handleApplyView}
         onSave={handleSaveView}
-        onDelete={deleteView}
+        onDelete={(id) => {
+          if (id === activeViewId) setActiveViewId(null)
+          deleteView(id)
+        }}
       />
 
       {/* Toolbar */}
@@ -632,7 +635,10 @@ export function TableView({ schema, table, url }: TableViewProps) {
         <FilterBar
           columns={columns}
           filters={url.filters}
-          onChange={url.setFilters}
+          onChange={(next) => {
+            url.setFilters(next)
+            setActiveViewId(null)
+          }}
           schema={schema}
           table={table}
         />

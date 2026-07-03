@@ -80,7 +80,7 @@ export function ViewsBar({
               e.stopPropagation()
               onDelete(view.id)
             }}
-            className="ml-0.5 rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover/view:opacity-100"
+            className="ml-0.5 rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover/view:opacity-100 group-focus-within/view:opacity-100"
             aria-label={`Delete view "${view.name}"`}
           >
             <XIcon className="size-3" />
