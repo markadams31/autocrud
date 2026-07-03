@@ -14,6 +14,9 @@ export default mergeConfig(
       environment: 'jsdom',
       globals: true,
       setupFiles: ['./src/test-setup.ts'],
+      // 15 s: Windows jsdom + large package transforms (App Insights, axe) are
+      // slow on first run and routinely exceed the 5 s default.
+      testTimeout: 15_000,
       // src unit/component tests + the e2e mock's contract test (the Playwright
       // specs themselves are run by Playwright, not Vitest).
       include: ['src/**/*.test.{ts,tsx}', 'e2e/**/*.contract.test.{ts,tsx}'],
