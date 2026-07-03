@@ -156,6 +156,16 @@ repos:
         files: '^backend/.*\.py$'
         pass_filenames: false
         stages: [pre-push]
+      # Type gate — mirrors the "Type-check + build" step in the frontend-checks
+      # CI job (tsc -b && vite build). The vite bundle is too slow for local push,
+      # so we run tsc alone: same type-error surface, no emit, ~5 s.
+      - id: frontend-typecheck
+        name: Frontend type check (tsc)
+        language: system
+        entry: npm --prefix frontend run typecheck
+        files: '^frontend/'
+        pass_filenames: false
+        stages: [pre-push]
       - id: frontend-unit
         name: Frontend unit tests (vitest)
         language: system
