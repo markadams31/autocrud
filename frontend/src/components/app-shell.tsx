@@ -51,7 +51,7 @@ export function AppShell() {
     const req: QueryRequest = {
       search: '',
       filters: {},
-      sort: { column: '', direction: 'asc' },
+      sort: [],
       page: 1,
       page_size: url.pageSize,
     }
