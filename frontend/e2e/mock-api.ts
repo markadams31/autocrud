@@ -198,7 +198,7 @@ export async function installMockApi(
       const body = (route.request().postDataJSON() ?? {}) as {
         search?: string
         filters?: Record<string, FilterSpec>
-        sort?: { column?: string; direction?: string }
+        sort?: { column: string; direction: string }[]
       }
       const search = (body.search ?? '').toLowerCase()
       const filters = body.filters ?? {}
@@ -207,9 +207,10 @@ export async function installMockApi(
           (!search || JSON.stringify(r).toLowerCase().includes(search)) &&
           matchesFilters(r, filters),
       )
-      const sortCol = body.sort?.column
-      if (sortCol) {
-        const dir = body.sort?.direction === 'desc' ? -1 : 1
+      const primarySort = body.sort?.[0]
+      if (primarySort) {
+        const { column: sortCol, direction } = primarySort
+        const dir = direction === 'desc' ? -1 : 1
         result = [...result].sort((a, b) => {
           const av = a[sortCol]
           const bv = b[sortCol]
