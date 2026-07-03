@@ -270,6 +270,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 f"Could not reach the app on port {APP_PORT}. "
                 f"Is it running?\n{e}".encode()
             )
+        except ConnectionError:
+            pass
 
     # Forward all HTTP methods through the same handler.
     def do_GET(self):    self._forward()

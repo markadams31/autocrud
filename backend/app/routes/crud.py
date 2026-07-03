@@ -90,7 +90,7 @@ class QueryRequest(BaseModel):
     #   - operator form: {"op": "gt", "value": 100}  (see _filter_clause)
     #   - shorthand: a bare scalar (equality) or a list (IN)
     filters:   dict[str, Any]       = {}
-    sort:      SortRequest          = SortRequest()
+    sort:      list[SortRequest]    = []    # ordered sort specs; PK appended for stability
     page:      int                  = 1     # 1-based
     page_size: int                  = 50    # rows per page, capped below
 
@@ -791,27 +791,29 @@ def query_rows(
         stmt       = stmt.where(clause)
         count_stmt = count_stmt.where(clause)
 
-    # Sorting — explicit column first, PK columns appended for stability. An
-    # unknown sort column or direction is rejected, not silently ignored: a
+    # Sorting — each requested column applied in order, PK appended for stability.
+    # An unknown column or invalid direction is rejected, not silently ignored: a
     # dropped sort returns default-ordered rows while the client believes it
     # sorted, so the mismatch is invisible.
-    if body.sort.column:
-        if body.sort.column not in t.c:
+    sorted_cols: set[str] = set()
+    for s in body.sort:
+        if not s.column:
+            continue
+        if s.column not in t.c:
             raise ApiError(
                 ErrorCode.VALIDATION_ERROR,
-                fields={"sort": f"Unknown column '{body.sort.column}'."},
+                fields={"sort": f"Unknown column '{s.column}'."},
             )
-        if body.sort.direction not in ("asc", "desc"):
+        if s.direction not in ("asc", "desc"):
             raise ApiError(
                 ErrorCode.VALIDATION_ERROR,
-                fields={"sort": f"Invalid sort direction '{body.sort.direction}'."},
+                fields={"sort": f"Invalid sort direction '{s.direction}'."},
             )
-        sa_col = t.c[body.sort.column]
-        stmt = stmt.order_by(
-            sa_col.desc() if body.sort.direction == "desc" else sa_col.asc()
-        )
+        sa_col = t.c[s.column]
+        stmt = stmt.order_by(sa_col.desc() if s.direction == "desc" else sa_col.asc())
+        sorted_cols.add(s.column)
 
-    pk_cols = [t.c[name] for name in table.primary_key if name != body.sort.column]
+    pk_cols = [t.c[name] for name in table.primary_key if name not in sorted_cols]
     if pk_cols:
         stmt = stmt.order_by(*pk_cols)
 

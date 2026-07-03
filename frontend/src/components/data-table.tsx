@@ -19,8 +19,10 @@ import { useEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
 import { EyeIcon, PencilIcon } from 'lucide-react'
 
+
 import { AnimatedTrash } from '@/components/animated-trash'
 import { Cell, EditableCell, HeaderCell, type SortState } from '@/components/data-table-cells'
+
 import {
   TableBody,
   TableCell,
@@ -48,7 +50,7 @@ interface DataTableProps {
   rows: Row[]
   fkLabels: FkLabelMap
   sort: SortState
-  onSort: (column: string) => void
+  onSort: (column: string, additive: boolean) => void
   loading: boolean
   skeletonRows?: number
   density?: Density
@@ -73,6 +75,12 @@ interface DataTableProps {
    * still edit via the slide-over.
    */
   onCellEdit?: (row: Row, column: ColumnMeta, value: unknown) => void
+  /** Per-column width overrides (px). Absent → type-derived default. */
+  columnWidths?: Record<string, number>
+  /** Called when the user drags a resize handle; parent persists the new width. */
+  onColumnResize?: (column: string, width: number) => void
+  /** Called when the user drags a column header to a new position. */
+  onColumnReorder?: (from: string, to: string) => void
 }
 
 // Shared classes for the sticky actions column so header and body stay aligned.
@@ -127,6 +135,9 @@ export function DataTable({
   schema,
   table,
   onCellEdit,
+  columnWidths,
+  onColumnResize,
+  onColumnReorder,
 }: DataTableProps) {
   // The actions column is always present: every row offers a keyboard-reachable
   // "View" control (opening the read-only detail), so that action isn't available
@@ -169,6 +180,49 @@ export function DataTable({
     }
   }
 
+  // ── Column drag-to-reorder ─────────────────────────────────────────────────
+  const draggingCol = useRef<string | null>(null)
+  const [dragOverCol, setDragOverCol] = useState<string | null>(null)
+
+  function handleDragStart(col: string) {
+    draggingCol.current = col
+  }
+
+  function handleDragOver(col: string) {
+    if (draggingCol.current && draggingCol.current !== col) {
+      setDragOverCol(col)
+    }
+  }
+
+  function handleDrop(targetCol: string) {
+    if (draggingCol.current && draggingCol.current !== targetCol) {
+      onColumnReorder?.(draggingCol.current, targetCol)
+    }
+    setDragOverCol(null)
+    draggingCol.current = null
+  }
+
+  // ── Column resize ──────────────────────────────────────────────────────────
+  function handleResizePointerDown(e: React.PointerEvent, colName: string) {
+    e.preventDefault()
+    const startX = e.clientX
+    const startWidth = columnWidths?.[colName] ?? columnWidth(columns.find((c) => c.name === colName)!)
+
+    function onMove(moveE: PointerEvent) {
+      const newWidth = Math.max(60, startWidth + moveE.clientX - startX)
+      onColumnResize?.(colName, Math.round(newWidth))
+    }
+
+    function onUp() {
+      document.removeEventListener('pointermove', onMove)
+      document.removeEventListener('pointerup', onUp)
+    }
+
+    document.addEventListener('pointermove', onMove)
+    document.addEventListener('pointerup', onUp)
+  }
+
+  // ── Selection header state ─────────────────────────────────────────────────
   // Selection header state, derived from the rows currently loaded on this page.
   const selectedOnPage = selection ? rows.filter(selection.isSelected).length : 0
   const allLoadedSelected = selectedOnPage > 0 && selectedOnPage === rows.length
@@ -187,8 +241,9 @@ export function DataTable({
     if (!loading && rows.length) revealedRef.current = true
   }, [loading, rows.length])
 
-  // Pre-compute fixed widths so the table never reflows as content changes.
-  const widths = columns.map(columnWidth)
+  // Pre-compute fixed widths. Per-column overrides (from resize) take precedence
+  // over the type-derived defaults, so the table never reflows as data changes.
+  const widths = columns.map((c) => columnWidths?.[c.name] ?? columnWidth(c))
   // One column per action button: View (always) + Edit/Delete when allowed.
   const actionWidth =
     (1 + (permissions.update ? 1 : 0) + (permissions.delete ? 1 : 0)) * 34 + 16
@@ -223,7 +278,22 @@ export function DataTable({
               </TableHead>
             )}
             {columns.map((column) => (
-              <HeaderCell key={column.name} column={column} sort={sort} onSort={onSort} />
+              <HeaderCell
+                key={column.name}
+                column={column}
+                sort={sort}
+                onSort={onSort}
+                isDragOver={dragOverCol === column.name}
+                onDragStart={onColumnReorder ? () => handleDragStart(column.name) : undefined}
+                onDragOver={onColumnReorder ? () => handleDragOver(column.name) : undefined}
+                onDragLeave={onColumnReorder ? () => setDragOverCol(null) : undefined}
+                onDrop={onColumnReorder ? () => handleDrop(column.name) : undefined}
+                onResizePointerDown={
+                  onColumnResize
+                    ? (e) => handleResizePointerDown(e, column.name)
+                    : undefined
+                }
+              />
             ))}
             {showActions && (
               <TableHead

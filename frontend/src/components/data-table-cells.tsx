@@ -35,13 +35,10 @@ import type { FkLabelMap } from '@/hooks/queries'
 import { convertFieldValue, toInputValue, type FormValue } from '@/lib/field-values'
 import { fieldLabel, formatValue, isNumericColumn, NULL_DISPLAY } from '@/lib/format'
 import { cn } from '@/lib/utils'
-import type { ColumnMeta, FieldType, Row, SortDirection } from '@/types'
+import type { ColumnMeta, FieldType, Row, SortSpec } from '@/types'
 
-/** The grid's active sort: which column, which direction. */
-export interface SortState {
-  column: string
-  direction: SortDirection
-}
+/** The grid's active sort — an ordered list of column + direction pairs. */
+export type SortState = SortSpec[]
 
 /**
  * In-place editor for a single cell. Reuses FieldControl so the editor matches
@@ -159,37 +156,68 @@ export function Cell({
 }
 
 /**
- * A sortable column header. Clicking cycles the sort for its column; hovering
- * or keyboard-focusing it opens a card with the column's full metadata
- * (ColumnMetaCard). The card replaces the old native `title` tooltip — richer,
- * and keyboard/screen-reader accessible via the base-ui preview-card.
+ * A sortable column header. Click cycles the sort; Shift+click adds a secondary
+ * sort key. Multi-sort shows a numeric badge (¹ ²) so the priority is visible.
+ * Drag the header to reorder columns; drag the right edge to resize.
  */
 export function HeaderCell({
   column,
   sort,
   onSort,
+  isDragOver = false,
+  onDragStart,
+  onDragOver: onDragOverProp,
+  onDragLeave,
+  onDrop,
+  onResizePointerDown,
 }: {
   column: ColumnMeta
   sort: SortState
-  onSort: (c: string) => void
+  onSort: (c: string, additive: boolean) => void
+  isDragOver?: boolean
+  onDragStart?: () => void
+  onDragOver?: (e: React.DragEvent) => void
+  onDragLeave?: () => void
+  onDrop?: () => void
+  onResizePointerDown?: (e: React.PointerEvent) => void
 }) {
-  const active = sort.column === column.name
-  const Icon = active ? (sort.direction === 'asc' ? ArrowUpIcon : ArrowDownIcon) : ChevronsUpDownIcon
+  const sortIndex = sort.findIndex((s) => s.column === column.name)
+  const active = sortIndex >= 0
+  const direction = active ? sort[sortIndex].direction : 'asc'
+  const Icon = active ? (direction === 'asc' ? ArrowUpIcon : ArrowDownIcon) : ChevronsUpDownIcon
   const numeric = isNumericColumn(column)
+  const SUPERSCRIPTS = ['¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹']
+
   return (
     <TableHead
       className={cn(
-        'group/head sticky top-0 z-20 h-9 bg-muted/80 backdrop-blur-sm transition-colors shadow-[inset_0_-1px_0_var(--border)] hover:bg-muted',
+        'group/head relative sticky top-0 z-20 h-9 bg-muted/80 backdrop-blur-sm transition-colors shadow-[inset_0_-1px_0_var(--border)] hover:bg-muted select-none',
         numeric && 'text-right',
+        isDragOver && 'border-l-2 border-l-primary',
       )}
+      draggable={!!onDragStart}
+      onDragStart={(e) => {
+        e.dataTransfer.effectAllowed = 'move'
+        onDragStart?.()
+      }}
+      onDragOver={(e) => {
+        e.preventDefault()
+        e.dataTransfer.dropEffect = 'move'
+        onDragOverProp?.(e)
+      }}
+      onDragLeave={onDragLeave}
+      onDrop={(e) => {
+        e.preventDefault()
+        onDrop?.()
+      }}
     >
       <HoverCard>
         <HoverCardTrigger
           render={
             <button
               type="button"
-              onClick={() => onSort(column.name)}
-              aria-label={`Sort by ${fieldLabel(column)}`}
+              onClick={(e) => onSort(column.name, e.shiftKey)}
+              aria-label={`Sort by ${fieldLabel(column)} — Shift+click to add as secondary sort`}
               className={cn(
                 'group/sort -mx-1 inline-flex max-w-full items-center gap-1 rounded px-1 py-0.5 text-xs font-semibold tracking-wide uppercase transition-colors group-hover/head:text-foreground',
                 numeric && 'flex-row-reverse',
@@ -200,19 +228,42 @@ export function HeaderCell({
         >
           {column.is_primary_key && <KeyRoundIcon className="size-3 shrink-0 text-muted-foreground" />}
           <span className="truncate">{fieldLabel(column)}</span>
-          <Icon
-            className={cn(
-              'size-3 shrink-0 transition-all duration-150',
-              active
-                ? 'opacity-100'
-                : 'opacity-0 -translate-x-0.5 group-hover/head:translate-x-0 group-hover/head:opacity-60',
+          <span className="inline-flex shrink-0 items-center gap-px">
+            <Icon
+              className={cn(
+                'size-3 transition-all duration-150',
+                active
+                  ? 'opacity-100'
+                  : 'opacity-0 -translate-x-0.5 group-hover/head:translate-x-0 group-hover/head:opacity-60',
+              )}
+            />
+            {active && sort.length > 1 && (
+              <span className="text-[10px] leading-none">{SUPERSCRIPTS[sortIndex] ?? String(sortIndex + 1)}</span>
             )}
-          />
+          </span>
         </HoverCardTrigger>
         <HoverCardContent side="bottom" align="start" className="w-fit min-w-36 max-w-xs p-3">
           <ColumnMetaCard column={column} />
+          <p className="mt-2 text-[10px] text-muted-foreground/60">
+            Shift+click to add a secondary sort
+          </p>
         </HoverCardContent>
       </HoverCard>
+
+      {/* Resize handle — a narrow drag target at the right edge. */}
+      {onResizePointerDown && (
+        // eslint-disable-next-line jsx-a11y/no-static-element-interactions, jsx-a11y/click-events-have-key-events
+        <div
+          className="absolute inset-y-0 right-0 w-2 cursor-col-resize"
+          onPointerDown={(e) => {
+            e.stopPropagation()
+            onResizePointerDown(e)
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="absolute right-0 top-1 bottom-1 w-px bg-border opacity-0 transition-opacity group-hover/head:opacity-100" />
+        </div>
+      )}
     </TableHead>
   )
 }
