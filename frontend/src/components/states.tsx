@@ -9,6 +9,7 @@
 
 import type { LucideIcon } from 'lucide-react'
 import {
+  ClockIcon,
   DatabaseIcon,
   InboxIcon,
   LockIcon,
@@ -88,6 +89,12 @@ function describeError(error: unknown): { icon: LucideIcon; title: string; descr
           icon: ServerCrashIcon,
           title: 'The database is unavailable',
           description: 'The server couldn’t reach the database. This is usually temporary — try again in a moment.',
+        }
+      case 'RATE_LIMITED':
+        return {
+          icon: ClockIcon,
+          title: 'Too many requests',
+          description: 'Please wait a moment before trying again.',
         }
       case 'NOT_FOUND':
         return {

@@ -111,10 +111,13 @@ def configure_telemetry() -> bool:
         from azure.monitor.opentelemetry import configure_azure_monitor
     except ImportError:
         # The package is an optional runtime dependency. If the image was built
-        # without it, degrade gracefully to stdout-only logging.
+        # without it, degrade gracefully to stdout-only logging. exc_info here
+        # is what tells us *which* import failed (the package itself vs. a
+        # transitive dependency) — bare ImportError text alone isn't enough.
         logger.warning(
             "azure-monitor-opentelemetry is not installed — "
-            "Application Insights export disabled."
+            "Application Insights export disabled.",
+            exc_info=True,
         )
         return False
 
