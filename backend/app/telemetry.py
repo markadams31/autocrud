@@ -170,18 +170,32 @@ def instrument_sqlalchemy() -> bool:
     """
     Trace every database statement as an App Insights dependency (AppDependencies).
 
-    Patches `sqlalchemy.create_engine` so each Engine built afterwards emits a span
-    per executed statement — the SQL text, the target server/database, and the
-    duration — nested under the active request span (shared OperationId). Database
-    time that previously hid inside a request's total latency (e.g. a slow
-    /meta/options FK lookup) becomes individually visible and attributable.
+    Patches `mssql_python.connect` (via opentelemetry-instrumentation-dbapi's
+    DB-API-level integration, not opentelemetry-instrumentation-sqlalchemy) so
+    every connection made afterwards emits a span per executed statement — the
+    SQL text and duration, nested under the active request span (shared trace
+    id, confirmed by direct test: the DB span's parent is the request span).
+    Database time that previously hid inside a request's total latency (e.g. a
+    slow /meta/options FK lookup) becomes individually visible and attributable.
 
-    Global patching, rather than instrumenting a named engine, because this app has
-    no fixed set of engines: connection.py builds a fresh pooled Engine per
-    signed-in user on demand, alongside the managed-identity reflection engine.
-    Patching create_engine catches them all — but only engines created *after* the
-    patch, and connection.py binds `create_engine` by name when it is imported.
-    main.py therefore calls this *before* importing app.connection.
+    Patches at the DB-API layer, not via SQLAlchemyInstrumentor, because this
+    app's SQLAlchemy pin (the 2.1 line, required for the mssql+mssqlpython
+    dialect — see connection.py) is outside every released
+    opentelemetry-instrumentation-sqlalchemy version's declared support
+    ceiling (<2.1.0 as of 0.64b0, its latest). That instrumentor's default
+    behaviour on an unsupported version is to log a warning and silently
+    decline to patch `create_engine` while still reporting success — so this
+    app shipped with zero SQL dependency spans for a period, undetected,
+    until exc_info logging surfaced it. opentelemetry-instrumentation-dbapi
+    has no such version gate: it patches the driver's own `connect` directly,
+    independent of which SQLAlchemy version sits on top of it, so it isn't
+    affected by (and doesn't need to wait on) that upstream gap.
+
+    Patches the module-level `mssql_python.connect` once, globally — every
+    Engine connection.py builds (the reflection engine, and each per-user OBO
+    engine built on demand) calls it under the hood via the mssql+mssqlpython
+    SQLAlchemy dialect, so one patch, applied before app.connection is
+    imported, catches every connection this app ever opens.
 
     Because it runs that early — before _configure_logging() sets up the root
     handler — a success line emitted here would be dropped, so this function only
@@ -195,14 +209,17 @@ def instrument_sqlalchemy() -> bool:
     if not telemetry_enabled() or _sqlalchemy_instrumented:
         return _sqlalchemy_instrumented
     try:
-        from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
+        from opentelemetry.instrumentation.dbapi import trace_integration
+        import mssql_python
 
-        # No engine argument: wrap create_engine so every engine built afterwards
-        # is traced (the per-user OBO engines have no fixed handle to pass here).
-        SQLAlchemyInstrumentor().instrument()
+        # trace_integration's stub types connect_module as Callable, but every
+        # real usage (including its own docs) passes the driver module itself,
+        # matching wrap_connect's actual runtime handling (getattr(module,
+        # connect_method_name)) — a stub/reality mismatch, not a real type error.
+        trace_integration(mssql_python, "connect", "mssql")  # pyright: ignore[reportArgumentType]
     except Exception:  # noqa: BLE001 — DB spans are a bonus, never fatal
         logger.warning(
-            "SQLAlchemy instrumentation unavailable — no database dependency spans.",
+            "Database driver instrumentation unavailable — no database dependency spans.",
             exc_info=True,
         )
         return False

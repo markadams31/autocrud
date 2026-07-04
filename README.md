@@ -472,6 +472,77 @@ from the same origin. Infrastructure is provisioned with Terraform (Azure App Se
 Container Registry, SQL, Entra/EasyAuth). See [`infra/README.md`](infra/README.md) for
 provisioning, image build/push, and post-provisioning steps.
 
+## Observability
+
+Every environment with `APPLICATIONINSIGHTS_CONNECTION_STRING` set exports to Azure
+Application Insights, both server- and client-side, so a production incident can be
+diagnosed from telemetry rather than a live debugging session against the running
+container.
+
+### What's wired up
+
+- **Server** (`app/telemetry.py`) — the `azure-monitor-opentelemetry` distro, configured at
+  import time in `main.py` before the FastAPI app is constructed. Ships three signal types:
+  every Python `logging` record → `AppTraces`, unhandled exceptions → `AppExceptions`, one
+  span per HTTP request → `AppRequests`. FastAPI is instrumented explicitly
+  (`instrument_fastapi`) rather than via the distro's auto-instrumentation, which produced no
+  spans for this app.
+- **Client** — the frontend initialises the same App Insights JS SDK against the connection
+  string served from `GET /config`, so browser-side page views, XHR/fetch calls, and JS
+  exceptions land in the same App Insights resource as the server telemetry.
+- **Structured access log** — every request gets a short correlation id (`app/middleware.py`):
+  an inbound `X-Request-ID` is honoured (sanitised — see `sanitize_request_id`) for
+  cross-service correlation, otherwise one is generated. It's echoed as the `X-Request-ID`
+  response header, attached to every log line emitted while handling that request via a
+  `contextvars`-backed log filter, and rides along in the exported `AppTraces` rows'
+  `Properties` (queried as `AppTraces | where Properties.request_id == "..."` against the
+  Log Analytics workspace, or `customDimensions.request_id` via the classic Application
+  Insights query API) — so `request_id` is a stable key across the structured access log and
+  every application log line for that request, regardless of which table it's queried from.
+- **Platform logs** — independent of the app entirely: `AppServiceHTTPLogs` (edge, includes
+  requests EasyAuth rejected before the app ever saw them),
+  `AppServicePlatformLogs`/`AppServiceConsoleLogs` (container stdout/stderr, including
+  startup and any traceback the app's own logging didn't format), all flowing to the Log
+  Analytics workspace via a diagnostic setting — queryable with
+  `az monitor log-analytics query`, no log-zip download required.
+
+### Tracing one user action across the whole journey
+
+The `traceparent`/`OperationId` that App Insights' distributed tracing wires up by default is
+**per browser page session, not per user action** — every request issued from one loaded page
+shares the same trace id, because the client SDK mints it once at page load. It's the right
+key for "what did this browser tab do over its lifetime," but too coarse for "what happened
+when the user clicked Save just now."
+
+The reliable per-action key is **`request_id`** (the short id described above): it's minted
+fresh per request, appears as the `X-Request-ID` response header the browser receives, and on
+every server-side log line for that request. To trace a single action end-to-end:
+
+1. In the browser's Network tab, find the request and read its `X-Request-ID` response header.
+2. Query `AppTraces | where Properties.request_id == "<id>"` — this returns every log line the
+   server emitted while handling that one request: the access-log summary (method, path,
+   status, duration, user) plus anything the route handler itself logged (e.g. the database's
+   own error text on a `CONSTRAINT_VIOLATION`).
+3. Cross-check `AppServiceHTTPLogs` for the same timestamp if you need to confirm the request
+   reached the app at all (rules out EasyAuth having rejected it before the app saw it) — this
+   is also the faster signal to check first, since it lands in Log Analytics within seconds,
+   while `AppTraces`/`AppRequests` can lag several minutes.
+
+### SQL statement timing
+
+Database time shows up as `AppDependencies` spans (SQL text, duration), nested under the
+request span. This app pins SQLAlchemy to the 2.1 line (required for the `mssql+mssqlpython`
+dialect — see [CLAUDE.md's dependency/driver stack notes](CLAUDE.md#dependency-and-driver-stack)),
+which no released version of `opentelemetry-instrumentation-sqlalchemy` supports (it caps at
+`<2.1.0`, and its default behaviour on an unsupported version is to log a warning and silently
+decline to instrument at all while still reporting success — a real incident here for a
+while, until `instrument_sqlalchemy()` was changed to turn that into a visible failure instead
+of a silent one). The fix was to instrument one layer lower: `instrument_sqlalchemy()` patches
+`mssql_python.connect` directly via `opentelemetry-instrumentation-dbapi`, which has no
+SQLAlchemy version dependency at all — every engine `connection.py` builds calls that same
+`connect` underneath the SQLAlchemy dialect regardless of SQLAlchemy's version, so this
+approach doesn't need to wait on the SQLAlchemy-specific instrumentor catching up.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
