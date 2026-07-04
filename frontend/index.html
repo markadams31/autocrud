@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Auto CRUD — a full CRUD interface generated live from your database schema." />
+    <title>Auto CRUD</title>
+    <script>
+      // Apply the stored theme + accent before first paint to avoid a flash of
+      // the wrong theme. Kept in sync after mount by theme-provider.tsx.
+      (function () {
+        try {
+          var t = localStorage.getItem('autocrud-theme')
+          // 'dark'/'light' as stored; if unset, follow the OS this once.
+          var dark =
+            t === 'dark' ||
+            (t !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+          var root = document.documentElement
+          if (dark) root.classList.add('dark')
+          root.style.colorScheme = dark ? 'dark' : 'light'
+          // 'indigo' is the default and has its own CSS block (so it applies in
+          // dark mode too), so always set the attribute.
+          root.setAttribute('data-accent', localStorage.getItem('autocrud-accent') || 'indigo')
+        } catch (e) {}
+      })()
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

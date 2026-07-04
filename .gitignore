@@ -1,0 +1,54 @@
+# ── Python ──────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.uv/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# ── Environment / secrets ────────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+
+# ── Node / frontend ──────────────────────────────────────────────────────────
+node_modules/
+frontend/.vite/
+frontend/coverage/
+backend/app/frontend/dist/
+
+# ── Playwright (frontend e2e) ────────────────────────────────────────────────
+frontend/test-results/
+frontend/playwright-report/
+frontend/blob-report/
+frontend/.playwright/
+
+# ── Terraform ────────────────────────────────────────────────────────────────
+infra/**/.terraform/
+infra/**/*.tfvars
+!infra/**/*.tfvars.example
+infra/**/*.tfstate
+infra/**/*.tfstate.backup
+# Lock files are committed for the root configs (the environments) but NOT for the
+# shared module — a lock only appears under modules/ from running `terraform init`
+# there (e.g. the CI validate step) and is a throwaway artifact.
+infra/modules/**/.terraform.lock.hcl
+
+# ── Logs ────────────────────────────────────────────────────────────────────
+*.log
+
+# ── OS / editor ─────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

@@ -1,0 +1,136 @@
+name: Security
+
+# Secret, SAST, and dependency scanning. Kept out of ci.yml (the test gate) so it
+# can also run on a weekly schedule — catching newly-disclosed CVEs in code that
+# hasn't changed, not only on PRs. Tools are installed as pinned release binaries
+# / via uv rather than marketplace actions, matching this repo's preference (see
+# the actionlint job in ci.yml). Findings upload to the GitHub Security tab (code
+# scanning) as SARIF where supported, next to CodeQL.
+#
+# Container-image vulnerability scanning lives in image.yml (the build-once flow),
+# so the exact digest that ships is the one that's gated — not a separate build.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 6 * * 1" # Mondays 06:17 UTC — weekly freshness sweep
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  secrets:
+    name: Secrets · gitleaks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write # upload SARIF to code scanning
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0 # full history so a scheduled scan covers every commit
+          persist-credentials: false
+      - name: Install gitleaks
+        env:
+          GITLEAKS_VERSION: 8.18.4
+        run: |
+          curl -fsSL -o gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          tar -xzf gitleaks.tar.gz gitleaks
+      # --redact keeps any matched secret value out of the logs/report. Writes
+      # SARIF first, then exits non-zero on a finding (uploaded by the next step).
+      - name: Scan for secrets
+        run: ./gitleaks detect --source . --redact --report-format sarif --report-path gitleaks.sarif
+      - name: Upload SARIF
+        if: ${{ !cancelled() }}
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
+        with:
+          sarif_file: gitleaks.sarif
+          category: gitleaks
+
+  sast:
+    name: SAST · bandit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          enable-cache: true
+      # Scan the application only (tests are excluded via [tool.bandit] in
+      # pyproject). Gate at medium severity + confidence; reviewed findings are
+      # annotated inline with `# nosec`. CodeQL provides the Security-tab view for
+      # Python, so bandit here is a fast, focused second opinion.
+      - name: Run bandit
+        run: >-
+          uvx bandit@1.8.0 -c pyproject.toml -r app
+          --severity-level medium --confidence-level medium
+
+  python-deps:
+    name: Dependencies · pip-audit (Python)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          enable-cache: true
+      # Audit the resolved runtime dependencies (what actually ships) against the
+      # PyPI advisory DB. Dev/test extras aren't exported, so the gate tracks the
+      # shipped set; run pip-audit on the whole tree separately if you want dev too.
+      - name: Export locked runtime requirements
+        run: uv export --format requirements-txt --no-dev --no-emit-project -o requirements.txt
+      - name: Run pip-audit
+        run: uvx pip-audit -r requirements.txt --strict
+
+  npm-deps:
+    name: Dependencies · osv-scanner (frontend)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      # osv-scanner (OSV database) rather than `npm audit`, which is a flaky gate
+      # — its advisory feed churns and it over-reports dev-only advisories. OSV is
+      # steadier and emits SARIF for the Security tab.
+      - name: Install osv-scanner
+        env:
+          OSV_VERSION: 2.4.0
+        run: |
+          curl -fsSL -o osv-scanner \
+            "https://github.com/google/osv-scanner/releases/download/v${OSV_VERSION}/osv-scanner_linux_amd64"
+          chmod +x osv-scanner
+      - name: Scan frontend lockfile
+        run: >-
+          ./osv-scanner scan source --lockfile=frontend/package-lock.json
+          --format sarif --output osv.sarif
+      - name: Upload SARIF
+        if: ${{ !cancelled() }}
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
+        with:
+          sarif_file: osv.sarif
+          category: osv-scanner

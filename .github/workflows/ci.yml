@@ -1,0 +1,382 @@
+name: CI
+
+# Runs on every PR into main, and is also called as a gate by the deploy
+# workflows (workflow_call) so nothing ships without the relevant suite passing.
+# It deliberately does NOT trigger on push to main — the deploy-dev workflow
+# calls it there instead, so main builds run the suite exactly once.
+#
+# On PRs the jobs are path-filtered: a frontend-only change skips the backend
+# tiers, a docs-only change skips everything, etc. When called as a deploy gate
+# (push/release), every tier runs regardless of paths.
+on:
+  pull_request:
+    branches: [main]
+  workflow_call:
+    inputs:
+      is_deploy_gate:
+        description: Set to true when called as a deploy gate to skip the docker-build check (image.yml builds the real image immediately after).
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read # paths-filter reads the PR's changed files
+    outputs:
+      backend: ${{ steps.decide.outputs.backend }}
+      frontend: ${{ steps.decide.outputs.frontend }}
+      infra: ${{ steps.decide.outputs.infra }}
+      docker: ${{ steps.decide.outputs.docker }}
+      workflows: ${{ steps.decide.outputs.workflows }}
+    steps:
+      - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
+        id: filter
+        if: github.event_name == 'pull_request'
+        with:
+          filters: |
+            backend:
+              - 'backend/**'
+            frontend:
+              - 'frontend/**'
+            infra:
+              - 'infra/**'
+            docker:
+              - 'Dockerfile'
+              - '.dockerignore'
+              - 'backend/**'
+              - 'frontend/**'
+            # Any workflow change → lint the workflows (actionlint).
+            workflows:
+              - '.github/workflows/**'
+            # Only ci.yml itself can affect every tier, so force a full run on
+            # that — not on edits to deploy/codeql/etc. workflows, which the CI
+            # tiers don't exercise.
+            global:
+              - '.github/workflows/ci.yml'
+      # Force every area on when this isn't a PR (i.e. a deploy gate via
+      # workflow_call), or when ci.yml itself changed (could affect any job).
+      - id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          GLOBAL: ${{ steps.filter.outputs.global }}
+          BACKEND: ${{ steps.filter.outputs.backend }}
+          FRONTEND: ${{ steps.filter.outputs.frontend }}
+          INFRA: ${{ steps.filter.outputs.infra }}
+          DOCKER: ${{ steps.filter.outputs.docker }}
+          WORKFLOWS: ${{ steps.filter.outputs.workflows }}
+        run: |
+          emit() {
+            local value="$2"
+            if [ "$EVENT" != "pull_request" ] || [ "$GLOBAL" = "true" ]; then
+              value=true
+            fi
+            echo "$1=$value" >> "$GITHUB_OUTPUT"
+          }
+          emit backend "$BACKEND"
+          emit frontend "$FRONTEND"
+          emit infra "$INFRA"
+          emit docker "$DOCKER"
+          emit workflows "$WORKFLOWS"
+
+  actionlint:
+    name: Actionlint
+    needs: changes
+    if: needs.changes.outputs.workflows == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      # Pinned release binary, not a third-party action. shellcheck ships on the
+      # runner, so actionlint also lints the shell in `run:` blocks.
+      - name: Install actionlint
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+        run: |
+          curl -fsSL -o actionlint.tar.gz \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          tar -xzf actionlint.tar.gz actionlint
+      - name: Lint workflows
+        run: ./actionlint -color
+
+  backend-tests:
+    name: Backend · unit + API
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          enable-cache: true
+          version: "0.11.26"  # keep in sync with Dockerfile's ghcr.io/astral-sh/uv image tag
+      - name: Install dependencies
+        run: uv sync --extra test
+      # Tiers 1 & 2 run on SQLite with the dependencies overridden — no Docker,
+      # no ODBC driver, no real SQL Server needed (see backend/tests/README.md).
+      - name: Run unit + API tests
+        run: uv run pytest -m "not integration"
+
+  backend-types:
+    name: Backend · type check (pyright)
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          enable-cache: true
+          version: "0.11.26"  # keep in sync with Dockerfile's ghcr.io/astral-sh/uv image tag
+      - name: Install dependencies
+        run: uv sync --extra test
+      # Run pyright through uv so it type-checks against the app's real
+      # SQLAlchemy/Pydantic types; config lives in [tool.pyright] (pyproject.toml).
+      - name: Type-check (pyright)
+        run: uv run pyright
+
+  backend-integration:
+    name: Backend · integration (real SQL Server)
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      # The ODBC driver serves only the test bootstrap: the integration conftest
+      # polls readiness and loads schema.sql through pyodbc. The app under test
+      # runs on mssql-python, which bundles its own driver.
+      - name: Install Microsoft ODBC Driver 18
+        run: |
+          curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
+            | gpg --dearmor \
+            | sudo tee /usr/share/keyrings/microsoft-prod.gpg > /dev/null
+          echo "deb [signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/ubuntu/$(lsb_release -rs)/prod $(lsb_release -cs) main" \
+            | sudo tee /etc/apt/sources.list.d/mssql-release.list
+          sudo apt-get update
+          sudo ACCEPT_EULA=Y apt-get install -y --no-install-recommends msodbcsql18 unixodbc-dev
+      # The integration fixtures skip (rather than pull) if the image is absent,
+      # so pre-pull it here to make tier 3 actually run. Must match conftest.IMAGE
+      # exactly — 2025, for the native json/vector columns in schema.sql. (The old
+      # 2022 pull left the tier silently skipping after the 2025 switch.)
+      - name: Pre-pull SQL Server image
+        run: docker pull mcr.microsoft.com/mssql/server:2025-latest
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          enable-cache: true
+          version: "0.11.26"  # keep in sync with Dockerfile's ghcr.io/astral-sh/uv image tag
+      - name: Run integration tier
+        working-directory: backend
+        env:
+          # A skipped tier here is a green build that verified nothing (the
+          # reflection golden lives in this tier) — make environment-gate
+          # skips hard failures in CI. See tests/integration/conftest._skip.
+          CI_REQUIRE_INTEGRATION: "1"
+        run: |
+          uv sync --extra test
+          uv run pytest -m integration
+
+  frontend-checks:
+    name: Frontend · lint + unit + build
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Unit tests
+        run: npm run test:unit
+      - name: Type-check + build
+        run: npm run build
+
+  frontend-e2e:
+    name: Frontend · Playwright e2e
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      # Cache the downloaded browser (~23s of `playwright install`). Keyed to the
+      # lockfile, which pins the Playwright version. --with-deps still runs (OS
+      # libraries aren't cached), but the browser download is skipped on a hit.
+      - name: Cache Playwright browser
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+      # playwright.config.ts builds + serves the app via `vite preview`, and the
+      # specs stub every API call, so no backend or database is needed.
+      - name: Build the app
+        run: npm run build
+      - name: Run e2e tests
+        run: npm run test:e2e
+      - name: Upload Playwright report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playwright-traces
+          # Playwright writes traces/screenshots here on a failed retry
+          # (trace: 'on-first-retry'); the `list` reporter emits no report dir, so
+          # a green run has nothing to upload — ignore rather than warn.
+          path: frontend/test-results/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  docker-build:
+    name: Docker · build check
+    needs: changes
+    # Skip when called as a deploy gate: image.yml builds+pushes immediately after
+    # CI passes, which already validates the Dockerfile. Running it twice — once here
+    # with GHA cache + no push, once in image.yml with ACR registry cache + push —
+    # wastes a runner on a 100%-cached no-op. PRs still get the check.
+    if: needs.changes.outputs.docker == 'true' && !inputs.is_deploy_gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+      # Build-only (no push) so a broken Dockerfile fails the PR. The real
+      # build/push happens in ACR during deploy.
+      - name: Build image
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  terraform-validate:
+    name: Terraform · fmt + validate
+    needs: changes
+    if: needs.changes.outputs.infra == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TF_PLUGIN_CACHE_DIR: ${{ github.workspace }}/.terraform.d/plugin-cache
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.9.8
+          terraform_wrapper: false
+      # Provider binaries shared across all three init calls. Keyed to the lock
+      # files so the cache invalidates exactly when providers change.
+      - name: Create Terraform plugin cache dir
+        run: mkdir -p "$TF_PLUGIN_CACHE_DIR"
+      - name: Restore Terraform provider cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.TF_PLUGIN_CACHE_DIR }}
+          key: terraform-providers-${{ runner.os }}-${{ hashFiles('infra/**/.terraform.lock.hcl') }}
+      - name: Format check
+        working-directory: infra
+        run: terraform fmt -check -recursive
+      # -backend=false validates configuration without touching remote state or
+      # needing Azure credentials. validate doesn't require variable values.
+      - name: Validate module
+        working-directory: infra/modules/autocrud
+        run: |
+          terraform init -backend=false
+          terraform validate
+      - name: Validate dev
+        working-directory: infra/environments/dev
+        run: |
+          terraform init -backend=false
+          terraform validate
+      - name: Validate prod
+        working-directory: infra/environments/prod
+        run: |
+          terraform init -backend=false
+          terraform validate
+
+  # Single required status check for branch protection. Passes when every tier
+  # that ran succeeded (skipped tiers are fine); fails if any failed/was cancelled.
+  ci-success:
+    name: CI success
+    if: always()
+    needs:
+      - changes
+      - actionlint
+      - backend-tests
+      - backend-types
+      - backend-integration
+      - frontend-checks
+      - frontend-e2e
+      - docker-build
+      - terraform-validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify no required job failed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "Job results: $RESULTS"
+          for r in $RESULTS; do
+            case "$r" in
+              success|skipped) ;;
+              *) echo "::error::A required job ended with result '$r'"; exit 1 ;;
+            esac
+          done
+          echo "All required jobs passed (or were skipped)."
