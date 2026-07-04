@@ -4,58 +4,55 @@
 [![CodeQL](https://github.com/markadams31/autocrud/actions/workflows/codeql.yml/badge.svg)](https://github.com/markadams31/autocrud/actions/workflows/codeql.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A single FastAPI application that deploys against any Azure SQL database and instantly
-exposes a full CRUD API — and a matching web UI — for every table it finds, with no
-hand-written models, no table-specific code, and no redeployment when the schema changes.
-A generic, metadata-driven React SPA is served from the same origin; it builds its forms
-and data grids live from the API's metadata endpoints, so it adapts to schema changes with
-no frontend work.
-
-![The Auto CRUD web UI: a metadata-driven data grid generated for a table, with the schema-explorer sidebar, type-aware filters, resolved foreign-key labels, and inline and bulk editing.](docs/screenshot.png)
-
-*Every part of this screen — the sidebar, the grid, the filters, the controls — is generated at
-runtime from the API's metadata; nothing is table-specific. See [The web UI](#the-web-ui).*
-
-## The idea
-
-Teams frequently need simple web apps to manage structured data. The conventional path —
-a bespoke repo, models, routes, and frontend per request — creates a maintenance burden
-that scales with the number of apps. This is a different approach: one codebase, deployed
-as many times as needed, each instance pointed at a different database via environment
-variables.
+**One FastAPI + React application that points at any Azure SQL database and, with zero
+hand-written code, becomes a full CRUD API and web UI for every table it finds.** Reflect
+the schema at startup, generate validation models and API routes per table, and drive a
+metadata-driven SPA off the same metadata — no models to write, no frontend to update when
+the schema changes, no redeployment for a new table or column.
 
 ```
 One codebase  +  One database (per instance)  =  One deployed app
 ```
 
-A new data management need becomes a database provisioning task, not a software
-development task. Schema changes — new tables, new columns, altered constraints — take
-effect immediately after a refresh with no code change and no deployment. The people who
-own the data own the schema; the application adapts to whatever they publish.
+A new data-management need becomes a database provisioning task, not a software project.
 
-## When this isn't the right tool
+![The Auto CRUD web UI: a metadata-driven data grid generated for a table, with the schema-explorer sidebar, type-aware filters, resolved foreign-key labels, and inline and bulk editing.](docs/screenshot.png)
 
-Auto CRUD is a thin read/write layer over the live schema, which makes it the wrong choice
-for a few scenarios:
+*Every part of this screen — the sidebar, the grid, the filters, the controls — is generated at
+runtime from the API's metadata; nothing is table-specific.*
 
-- **Custom business logic.** The API does not run code around writes. If an insert needs to
-  call an external service, compute a derived value in Python, or orchestrate a multi-step
-  workflow, you need a dedicated endpoint — not a generic CRUD layer.
-- **Complex queries.** The query endpoint serves one table at a time. Multi-table joins,
-  aggregations, and reporting queries belong in a database view, a reporting tool, or a
-  purpose-built API. (Views themselves are not served; only tables.)
-- **Versioned external API contracts.** The API shape is derived directly from the live
-  schema. A schema change is an immediate API change. Third-party consumers that depend on
-  a stable, versioned contract need a different layer in front.
-- **Non-Azure-SQL databases.** Authentication is built around Entra OBO tokens and Azure SQL's
-  managed-identity support. It won't work against Postgres, MySQL, or on-premises SQL Server
-  without equivalent Entra token infrastructure.
-- **Tables without a primary key.** Tables with no primary key are skipped at reflection time
-  (rows can't be addressed individually). Add a surrogate key, or accept that those tables
-  won't appear in the API.
-- **Binary or file handling.** Binary columns are surfaced read-only. If a workflow involves
-  uploading or downloading files, use Azure Blob Storage with a dedicated endpoint; the
-  generic CRUD layer won't help there.
+**Stack:** FastAPI · SQLAlchemy 2.1 · mssql-python · Pydantic · React 19 · TypeScript ·
+TanStack Query · Azure SQL / Entra ID · OpenTelemetry · Terraform
+
+## Highlights
+
+A few decisions worth a closer look — each is covered in depth further down:
+
+- **Zero-trust authorization, enforced by SQL Server itself, not the app.** The API never
+  decides who can do what. Every data request runs under the *signed-in user's own* Azure SQL
+  token (via App Service EasyAuth → Entra On-Behalf-Of), so `SUSER_SNAME()` inside the
+  database resolves to the real caller and SQL Server's own grants are the only access control
+  that exists. A separate, narrowly-scoped managed identity (`VIEW DEFINITION` only, verified
+  in integration tests to see everything sysadmin sees and touch zero data) handles schema
+  reflection. See [Authentication and authorisation](#authentication-and-authorisation).
+- **The reflection layer is tested against a real, unprivileged SQL Server twice per run** —
+  once as `sa`, once as a login holding only `VIEW DEFINITION` — asserting identical output,
+  with the full result frozen field-for-field in a golden snapshot. Catches drift between
+  "works for me locally" and "works under the actual production grant." See
+  [Testing model](#testing-model).
+- **A generic write path that still respects database-owned columns, computed columns, and
+  concurrency** — identity/computed/default-generated columns are classified once at
+  reflection time (never re-derived per request), and tables with a `rowversion` get
+  automatic optimistic-concurrency `409 CONFLICT`s with no per-table code. See
+  [Column classification](#column-classification) and [Concurrent edits](#concurrent-edits).
+- **Diagnosed and fixed a silent instrumentation gap in a widely-used OpenTelemetry package**:
+  `opentelemetry-instrumentation-sqlalchemy` silently no-ops on newer SQLAlchemy versions
+  instead of failing loudly. Traced it, turned the silent failure into a visible one, and
+  worked around it by instrumenting one layer lower (the DB-API driver directly). See
+  [SQL statement timing](#sql-statement-timing).
+- **The frontend is entirely metadata-driven** — schema explorer, data grid, filters, forms,
+  and FK-aware comboboxes are all generated at runtime from `/meta`; a new table or column
+  shows up in the UI on the next refresh with no frontend commit. See [The web UI](#the-web-ui).
 
 ## How it works
 
@@ -87,73 +84,6 @@ present at `backend/app/frontend/dist`, it is mounted as a catch-all after all A
 the SPA builds its forms and data grids dynamically from the metadata endpoints, so no
 frontend changes are needed when the schema evolves. When no build is present, the backend
 logs a warning at startup and runs API-only.
-
-## The web UI
-
-The SPA is **metadata-driven**: the sidebar, the data grid, and every filter and form control
-are built at runtime from the API's metadata endpoints, so a new table or column shows up in the
-UI on the next refresh with no frontend change. What that gives you out of the box:
-
-- **Schema explorer** — browse the connected database, its schemas, and tables from the sidebar.
-- **Data grid** — search, multi-column sort, and pagination, with foreign keys resolved from raw
-  ids to their human-readable display label (e.g. `DepartmentID` → *Engineering*).
-- **Type-aware filtering** — operators are chosen from each column's type: `contains` /
-  `starts with` for text, `=` `≠` `>` `<` `between` for numbers, `is null` / `in`, and so on.
-- **Type-aware inputs** — a searchable **combobox** for foreign keys (type to filter by label), a
-  **number field** with steppers and scrub-to-change for integers, a switch for booleans, and
-  date pickers; decimals stay plain text so precision is never lost to a float round-trip.
-- **Create, edit, and inline edit** — record forms generated from the column metadata, enforcing
-  the same required/validation rules as the API, plus double-click-to-edit on a grid cell.
-- **Bulk operations** — select rows (or *all rows matching the current filter*) to apply one edit
-  across many, or bulk-delete — each applied atomically in a single transaction.
-- **Undoable deletes** — deletes happen instantly with an Undo toast rather than a confirm dialog.
-- **CSV import / export** — export the displayed (filtered) rows; import from a template with
-  foreign-keys-by-label resolution and per-cell validation before anything is written.
-- **Command palette** — `Ctrl` / `⌘ K` to jump straight to any table.
-- **Column controls** — show or hide columns, including a one-click *hide database-managed
-  columns* (identity keys and audit columns).
-- **Safe concurrent edits** — for a table with a `rowversion`, a conflicting save is detected,
-  surfaced clearly, and the latest row refetched — no silent lost updates.
-- **Auth-aware** — shows the signed-in user, and New / Edit / Delete appear only where the user's
-  real SQL grants allow; an expired session is refreshed and the request replayed transparently.
-
-The frontend stack and architecture are documented in [`frontend/README.md`](frontend/README.md).
-
-## Project layout
-
-```
-autocrud/
-├── backend/                  FastAPI service — the deployable application
-│   ├── app/
-│   │   ├── main.py               Entry point: app wiring, exception handler, SPA mount
-│   │   ├── config.py             Required env vars, validated once at startup
-│   │   ├── connection.py         Reflection (managed identity) + data (signed-in user) connections
-│   │   ├── reflection.py         Schema introspection, column classification, model factory
-│   │   ├── state.py              Current schema snapshot, swappable at runtime
-│   │   ├── errors.py             The single error contract
-│   │   ├── routes/               The endpoints — crud · meta · admin · identity
-│   │   └── …                     Supporting modules: request logging, security headers, telemetry
-│   ├── run.py                    Local dev launcher (uvicorn with reload)
-│   ├── dev_auth_proxy.py         Local-only EasyAuth emulator (never imported by the app)
-│   └── pyproject.toml            Package metadata + dependencies
-├── frontend/                 React SPA — metadata-driven UI (see frontend/README.md)
-│   └── src/                      Components, hooks, typed API client, formatters
-├── infra/                    Terraform — Azure deployment (see infra/README.md)
-│   ├── modules/autocrud/         Canonical definition of one environment
-│   └── environments/{dev,prod}/  Per-environment configuration
-├── database/                 Example schema + access setup (SQL Server)
-│   ├── seed.sql                  Sample Project Portfolio schema, data, audit triggers
-│   └── permissions.sql           Contained users and grants for the app-users group
-├── Dockerfile                Multi-stage build — frontend + backend in one image
-├── .dockerignore             Keeps the ACR/Docker build context small (excludes deps, infra, .git)
-├── .env.example
-└── LICENSE                   MIT
-```
-
-The backend reflects the schema and serves both the API and the built SPA from one origin;
-`frontend/` is a complete metadata-driven UI; `infra/` deploys the whole thing to Azure. 
-The backend serves the SPA from `backend/app/frontend/dist` when a build is present — the 
-repo-root `Dockerfile` produces this automatically — and runs API-only when it isn't.
 
 ## Architecture
 
@@ -208,6 +138,37 @@ sequenceDiagram
     User->>FastAPI: replay original request (safe — first attempt never ran)
     FastAPI-->>User: response
 ```
+
+## The web UI
+
+The SPA is **metadata-driven**: the sidebar, the data grid, and every filter and form control
+are built at runtime from the API's metadata endpoints, so a new table or column shows up in the
+UI on the next refresh with no frontend change. What that gives you out of the box:
+
+- **Schema explorer** — browse the connected database, its schemas, and tables from the sidebar.
+- **Data grid** — search, multi-column sort, and pagination, with foreign keys resolved from raw
+  ids to their human-readable display label (e.g. `DepartmentID` → *Engineering*).
+- **Type-aware filtering** — operators are chosen from each column's type: `contains` /
+  `starts with` for text, `=` `≠` `>` `<` `between` for numbers, `is null` / `in`, and so on.
+- **Type-aware inputs** — a searchable **combobox** for foreign keys (type to filter by label), a
+  **number field** with steppers and scrub-to-change for integers, a switch for booleans, and
+  date pickers; decimals stay plain text so precision is never lost to a float round-trip.
+- **Create, edit, and inline edit** — record forms generated from the column metadata, enforcing
+  the same required/validation rules as the API, plus double-click-to-edit on a grid cell.
+- **Bulk operations** — select rows (or *all rows matching the current filter*) to apply one edit
+  across many, or bulk-delete — each applied atomically in a single transaction.
+- **Undoable deletes** — deletes happen instantly with an Undo toast rather than a confirm dialog.
+- **CSV import / export** — export the displayed (filtered) rows; import from a template with
+  foreign-keys-by-label resolution and per-cell validation before anything is written.
+- **Command palette** — `Ctrl` / `⌘ K` to jump straight to any table.
+- **Column controls** — show or hide columns, including a one-click *hide database-managed
+  columns* (identity keys and audit columns).
+- **Safe concurrent edits** — for a table with a `rowversion`, a conflicting save is detected,
+  surfaced clearly, and the latest row refetched — no silent lost updates.
+- **Auth-aware** — shows the signed-in user, and New / Edit / Delete appear only where the user's
+  real SQL grants allow; an expired session is refreshed and the request replayed transparently.
+
+The frontend stack and architecture are documented in [`frontend/README.md`](frontend/README.md).
 
 ## Authentication and authorisation
 
@@ -327,6 +288,156 @@ CREATE TABLE dbo.Ref_Colour (
 );
 ```
 
+## Testing model
+
+Three tiers plus a golden pin:
+
+- **unit / api** — no database. The api tier runs routes against in-memory sqlite using
+  hand-built tables; `tests/conftest.py`'s `make_table_info(..., schema="dbo", facts=...)`
+  keys the snapshot under a schema while the table itself stays schemaless so SQL runs on
+  sqlite, and `pk_default_facts()` marks the PK database-supplied. Catalog facts are always
+  constructed explicitly (`ColumnFacts`) — hand-built SQLAlchemy markers are not consulted.
+- **integration** — the real contract. The reflection matrix runs every scenario **twice**:
+  as `sa` and as a login holding only `VIEW DEFINITION` (no data access); identical results
+  are the module's core promise. `golden_snapshot.json` freezes the entire reflection output
+  field-for-field. If you intentionally change reflection behaviour, regenerate with
+  `UPDATE_GOLDEN=1 uv run pytest tests/integration/test_reflection_golden.py` and explain the
+  diff in the PR — an unexplained golden diff is a bug.
+- Hard-won rule: **reflection- or driver-dependent behaviour needs a real-database test.**
+  Unit tests against hand-built tables have given false confidence twice (CHECK constraints,
+  reflected `autoincrement` semantics).
+
+## Observability
+
+Every environment with `APPLICATIONINSIGHTS_CONNECTION_STRING` set exports to Azure
+Application Insights, both server- and client-side, so a production incident can be
+diagnosed from telemetry rather than a live debugging session against the running
+container.
+
+### What's wired up
+
+- **Server** (`app/telemetry.py`) — the `azure-monitor-opentelemetry` distro, configured at
+  import time in `main.py` before the FastAPI app is constructed. Ships three signal types:
+  every Python `logging` record → `AppTraces`, unhandled exceptions → `AppExceptions`, one
+  span per HTTP request → `AppRequests`. FastAPI is instrumented explicitly
+  (`instrument_fastapi`) rather than via the distro's auto-instrumentation, which produced no
+  spans for this app.
+- **Client** — the frontend initialises the same App Insights JS SDK against the connection
+  string served from `GET /config`, so browser-side page views, XHR/fetch calls, and JS
+  exceptions land in the same App Insights resource as the server telemetry.
+- **Structured access log** — every request gets a short correlation id (`app/middleware.py`):
+  an inbound `X-Request-ID` is honoured (sanitised — see `sanitize_request_id`) for
+  cross-service correlation, otherwise one is generated. It's echoed as the `X-Request-ID`
+  response header, attached to every log line emitted while handling that request via a
+  `contextvars`-backed log filter, and rides along in the exported `AppTraces` rows'
+  `Properties` (queried as `AppTraces | where Properties.request_id == "..."` against the
+  Log Analytics workspace, or `customDimensions.request_id` via the classic Application
+  Insights query API) — so `request_id` is a stable key across the structured access log and
+  every application log line for that request, regardless of which table it's queried from.
+- **Platform logs** — independent of the app entirely: `AppServiceHTTPLogs` (edge, includes
+  requests EasyAuth rejected before the app ever saw them),
+  `AppServicePlatformLogs`/`AppServiceConsoleLogs` (container stdout/stderr, including
+  startup and any traceback the app's own logging didn't format), all flowing to the Log
+  Analytics workspace via a diagnostic setting — queryable with
+  `az monitor log-analytics query`, no log-zip download required.
+
+### Tracing one user action across the whole journey
+
+The `traceparent`/`OperationId` that App Insights' distributed tracing wires up by default is
+**per browser page session, not per user action** — every request issued from one loaded page
+shares the same trace id, because the client SDK mints it once at page load. It's the right
+key for "what did this browser tab do over its lifetime," but too coarse for "what happened
+when the user clicked Save just now."
+
+The reliable per-action key is **`request_id`** (the short id described above): it's minted
+fresh per request, appears as the `X-Request-ID` response header the browser receives, and on
+every server-side log line for that request. To trace a single action end-to-end:
+
+1. In the browser's Network tab, find the request and read its `X-Request-ID` response header.
+2. Query `AppTraces | where Properties.request_id == "<id>"` — this returns every log line the
+   server emitted while handling that one request: the access-log summary (method, path,
+   status, duration, user) plus anything the route handler itself logged (e.g. the database's
+   own error text on a `CONSTRAINT_VIOLATION`).
+3. Cross-check `AppServiceHTTPLogs` for the same timestamp if you need to confirm the request
+   reached the app at all (rules out EasyAuth having rejected it before the app saw it) — this
+   is also the faster signal to check first, since it lands in Log Analytics within seconds,
+   while `AppTraces`/`AppRequests` can lag several minutes.
+
+### SQL statement timing
+
+Database time shows up as `AppDependencies` spans (SQL text, duration), nested under the
+request span. This app pins SQLAlchemy to the 2.1 line (required for the `mssql+mssqlpython`
+dialect — see [CLAUDE.md's dependency/driver stack notes](CLAUDE.md#dependency-and-driver-stack)),
+which no released version of `opentelemetry-instrumentation-sqlalchemy` supports (it caps at
+`<2.1.0`, and its default behaviour on an unsupported version is to log a warning and silently
+decline to instrument at all while still reporting success — a real incident here for a
+while, until `instrument_sqlalchemy()` was changed to turn that into a visible failure instead
+of a silent one). The fix was to instrument one layer lower: `instrument_sqlalchemy()` patches
+`mssql_python.connect` directly via `opentelemetry-instrumentation-dbapi`, which has no
+SQLAlchemy version dependency at all — every engine `connection.py` builds calls that same
+`connect` underneath the SQLAlchemy dialect regardless of SQLAlchemy's version, so this
+approach doesn't need to wait on the SQLAlchemy-specific instrumentor catching up.
+
+## When this isn't the right tool
+
+Auto CRUD is a thin read/write layer over the live schema, which makes it the wrong choice
+for a few scenarios:
+
+- **Custom business logic.** The API does not run code around writes. If an insert needs to
+  call an external service, compute a derived value in Python, or orchestrate a multi-step
+  workflow, you need a dedicated endpoint — not a generic CRUD layer.
+- **Complex queries.** The query endpoint serves one table at a time. Multi-table joins,
+  aggregations, and reporting queries belong in a database view, a reporting tool, or a
+  purpose-built API. (Views themselves are not served; only tables.)
+- **Versioned external API contracts.** The API shape is derived directly from the live
+  schema. A schema change is an immediate API change. Third-party consumers that depend on
+  a stable, versioned contract need a different layer in front.
+- **Non-Azure-SQL databases.** Authentication is built around Entra OBO tokens and Azure SQL's
+  managed-identity support. It won't work against Postgres, MySQL, or on-premises SQL Server
+  without equivalent Entra token infrastructure.
+- **Tables without a primary key.** Tables with no primary key are skipped at reflection time
+  (rows can't be addressed individually). Add a surrogate key, or accept that those tables
+  won't appear in the API.
+- **Binary or file handling.** Binary columns are surfaced read-only. If a workflow involves
+  uploading or downloading files, use Azure Blob Storage with a dedicated endpoint; the
+  generic CRUD layer won't help there.
+
+## Project layout
+
+```
+autocrud/
+├── backend/                  FastAPI service — the deployable application
+│   ├── app/
+│   │   ├── main.py               Entry point: app wiring, exception handler, SPA mount
+│   │   ├── config.py             Required env vars, validated once at startup
+│   │   ├── connection.py         Reflection (managed identity) + data (signed-in user) connections
+│   │   ├── reflection.py         Schema introspection, column classification, model factory
+│   │   ├── state.py              Current schema snapshot, swappable at runtime
+│   │   ├── errors.py             The single error contract
+│   │   ├── routes/               The endpoints — crud · meta · admin · identity
+│   │   └── …                     Supporting modules: request logging, security headers, telemetry
+│   ├── run.py                    Local dev launcher (uvicorn with reload)
+│   ├── dev_auth_proxy.py         Local-only EasyAuth emulator (never imported by the app)
+│   └── pyproject.toml            Package metadata + dependencies
+├── frontend/                 React SPA — metadata-driven UI (see frontend/README.md)
+│   └── src/                      Components, hooks, typed API client, formatters
+├── infra/                    Terraform — Azure deployment (see infra/README.md)
+│   ├── modules/autocrud/         Canonical definition of one environment
+│   └── environments/{dev,prod}/  Per-environment configuration
+├── database/                 Example schema + access setup (SQL Server)
+│   ├── seed.sql                  Sample Project Portfolio schema, data, audit triggers
+│   └── permissions.sql           Contained users and grants for the app-users group
+├── Dockerfile                Multi-stage build — frontend + backend in one image
+├── .dockerignore             Keeps the ACR/Docker build context small (excludes deps, infra, .git)
+├── .env.example
+└── LICENSE                   MIT
+```
+
+The backend reflects the schema and serves both the API and the built SPA from one origin;
+`frontend/` is a complete metadata-driven UI; `infra/` deploys the whole thing to Azure.
+The backend serves the SPA from `backend/app/frontend/dist` when a build is present — the
+repo-root `Dockerfile` produces this automatically — and runs API-only when it isn't.
+
 ## Environment variables
 
 | Variable | Required | Description |
@@ -438,7 +549,7 @@ auto-syncs, so this step is optional — but it makes the first install explicit
 cd backend && uv run python run.py
 # (equivalent: uv run uvicorn app.main:app --reload)
 
-# Terminal 2 — dev auth proxy (port 8001). Injects the identity + Azure SQL token 
+# Terminal 2 — dev auth proxy (port 8001). Injects the identity + Azure SQL token
 # headers on every forwarded request.
 cd backend && uv run python dev_auth_proxy.py
 
@@ -471,77 +582,6 @@ frontend and the FastAPI backend in one multi-stage image, so the SPA is baked i
 from the same origin. Infrastructure is provisioned with Terraform (Azure App Service,
 Container Registry, SQL, Entra/EasyAuth). See [`infra/README.md`](infra/README.md) for
 provisioning, image build/push, and post-provisioning steps.
-
-## Observability
-
-Every environment with `APPLICATIONINSIGHTS_CONNECTION_STRING` set exports to Azure
-Application Insights, both server- and client-side, so a production incident can be
-diagnosed from telemetry rather than a live debugging session against the running
-container.
-
-### What's wired up
-
-- **Server** (`app/telemetry.py`) — the `azure-monitor-opentelemetry` distro, configured at
-  import time in `main.py` before the FastAPI app is constructed. Ships three signal types:
-  every Python `logging` record → `AppTraces`, unhandled exceptions → `AppExceptions`, one
-  span per HTTP request → `AppRequests`. FastAPI is instrumented explicitly
-  (`instrument_fastapi`) rather than via the distro's auto-instrumentation, which produced no
-  spans for this app.
-- **Client** — the frontend initialises the same App Insights JS SDK against the connection
-  string served from `GET /config`, so browser-side page views, XHR/fetch calls, and JS
-  exceptions land in the same App Insights resource as the server telemetry.
-- **Structured access log** — every request gets a short correlation id (`app/middleware.py`):
-  an inbound `X-Request-ID` is honoured (sanitised — see `sanitize_request_id`) for
-  cross-service correlation, otherwise one is generated. It's echoed as the `X-Request-ID`
-  response header, attached to every log line emitted while handling that request via a
-  `contextvars`-backed log filter, and rides along in the exported `AppTraces` rows'
-  `Properties` (queried as `AppTraces | where Properties.request_id == "..."` against the
-  Log Analytics workspace, or `customDimensions.request_id` via the classic Application
-  Insights query API) — so `request_id` is a stable key across the structured access log and
-  every application log line for that request, regardless of which table it's queried from.
-- **Platform logs** — independent of the app entirely: `AppServiceHTTPLogs` (edge, includes
-  requests EasyAuth rejected before the app ever saw them),
-  `AppServicePlatformLogs`/`AppServiceConsoleLogs` (container stdout/stderr, including
-  startup and any traceback the app's own logging didn't format), all flowing to the Log
-  Analytics workspace via a diagnostic setting — queryable with
-  `az monitor log-analytics query`, no log-zip download required.
-
-### Tracing one user action across the whole journey
-
-The `traceparent`/`OperationId` that App Insights' distributed tracing wires up by default is
-**per browser page session, not per user action** — every request issued from one loaded page
-shares the same trace id, because the client SDK mints it once at page load. It's the right
-key for "what did this browser tab do over its lifetime," but too coarse for "what happened
-when the user clicked Save just now."
-
-The reliable per-action key is **`request_id`** (the short id described above): it's minted
-fresh per request, appears as the `X-Request-ID` response header the browser receives, and on
-every server-side log line for that request. To trace a single action end-to-end:
-
-1. In the browser's Network tab, find the request and read its `X-Request-ID` response header.
-2. Query `AppTraces | where Properties.request_id == "<id>"` — this returns every log line the
-   server emitted while handling that one request: the access-log summary (method, path,
-   status, duration, user) plus anything the route handler itself logged (e.g. the database's
-   own error text on a `CONSTRAINT_VIOLATION`).
-3. Cross-check `AppServiceHTTPLogs` for the same timestamp if you need to confirm the request
-   reached the app at all (rules out EasyAuth having rejected it before the app saw it) — this
-   is also the faster signal to check first, since it lands in Log Analytics within seconds,
-   while `AppTraces`/`AppRequests` can lag several minutes.
-
-### SQL statement timing
-
-Database time shows up as `AppDependencies` spans (SQL text, duration), nested under the
-request span. This app pins SQLAlchemy to the 2.1 line (required for the `mssql+mssqlpython`
-dialect — see [CLAUDE.md's dependency/driver stack notes](CLAUDE.md#dependency-and-driver-stack)),
-which no released version of `opentelemetry-instrumentation-sqlalchemy` supports (it caps at
-`<2.1.0`, and its default behaviour on an unsupported version is to log a warning and silently
-decline to instrument at all while still reporting success — a real incident here for a
-while, until `instrument_sqlalchemy()` was changed to turn that into a visible failure instead
-of a silent one). The fix was to instrument one layer lower: `instrument_sqlalchemy()` patches
-`mssql_python.connect` directly via `opentelemetry-instrumentation-dbapi`, which has no
-SQLAlchemy version dependency at all — every engine `connection.py` builds calls that same
-`connect` underneath the SQLAlchemy dialect regardless of SQLAlchemy's version, so this
-approach doesn't need to wait on the SQLAlchemy-specific instrumentor catching up.
 
 ## License
 
