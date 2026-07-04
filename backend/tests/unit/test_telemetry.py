@@ -14,12 +14,14 @@ to patch create_engine at all, because opentelemetry-instrumentation-sqlalchemy'
 declared support caps below the SQLAlchemy 2.1 line this app requires (see
 connection.py) — its default dependency-conflict handling logs a warning and
 returns normally instead of raising, so instrument_sqlalchemy() had no way to
-notice. In all three cases the *setup call itself* reported success; only
-exercising the actually-instrumented code path (a live request, or the patched
-attribute) ever revealed the break. These cases set a real (fake-value)
-connection string and check for real effects — a request flowing through the
-instrumented app, the create_engine attribute actually being wrapped — so a
-regression that only breaks under live traffic fails here instead of production.
+notice (fixed by switching to opentelemetry-instrumentation-dbapi, which patches
+mssql_python.connect directly and has no SQLAlchemy version gate at all). In all
+three cases the *setup call itself* reported success; only exercising the
+actually-instrumented code path (a live request, or the patched attribute) ever
+revealed the break. These cases set a real (fake-value) connection string and
+check for real effects — a request flowing through the instrumented app, the
+patched attribute actually being wrapped — so a regression that only breaks
+under live traffic fails here instead of production.
 """
 
 import pytest
@@ -80,31 +82,89 @@ def test_configure_telemetry_is_noop_without_connection_string(monkeypatch):
     assert configure_telemetry() is False
 
 
-def test_instrument_sqlalchemy_return_value_matches_whether_it_actually_patched(
-    telemetry_env,
-):
-    # Regression guard for the third incident: instrument_sqlalchemy() returning
-    # True was not sufficient evidence either — SQLAlchemyInstrumentor's default
-    # dependency-conflict handling logs a warning and returns normally instead of
-    # raising when the installed SQLAlchemy falls outside its declared support
-    # range (true here: opentelemetry-instrumentation-sqlalchemy caps at
-    # SQLAlchemy <2.1, this app requires the 2.1 line — see connection.py), so a
-    # silent no-op looked identical to success. Assert the return value agrees
-    # with the actual effect (sqlalchemy.create_engine having been replaced),
-    # not that the effect happened — currently there IS no compatible release,
-    # so a "yes it worked" result here would itself be the regression.
+def test_instrument_sqlalchemy_patches_mssql_python_connect(telemetry_env):
+    # Regression guard for the third incident: instrument_sqlalchemy() reporting
+    # success was not sufficient evidence either — SQLAlchemyInstrumentor's
+    # default dependency-conflict handling logged a warning and returned
+    # normally instead of raising when the installed SQLAlchemy fell outside its
+    # declared support range, so a silent no-op looked identical to success (see
+    # git history for that incident). Now patches mssql_python.connect directly
+    # via opentelemetry-instrumentation-dbapi, which has no SQLAlchemy version
+    # gate — assert the return value agrees with the actual effect (the connect
+    # attribute having been replaced), not just that a boolean came back True.
     import app.telemetry as telemetry_module
-    import sqlalchemy
+    import mssql_python
 
-    original_create_engine = sqlalchemy.create_engine
+    original_connect = mssql_python.connect
     telemetry_module._sqlalchemy_instrumented = False
     try:
         result = instrument_sqlalchemy()
-        actually_patched = sqlalchemy.create_engine is not original_create_engine
-        assert result is actually_patched
+        actually_patched = mssql_python.connect is not original_connect
+        assert result is True
+        assert actually_patched is True
     finally:
         if telemetry_module._sqlalchemy_instrumented:
-            from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
+            from opentelemetry.instrumentation.dbapi import unwrap_connect
 
-            SQLAlchemyInstrumentor().uninstrument()
+            unwrap_connect(mssql_python, "connect")
             telemetry_module._sqlalchemy_instrumented = False
+
+
+def test_instrumented_mssql_connect_emits_a_span_nested_under_the_request(
+    telemetry_env,
+):
+    # The patch existing is not enough on its own — confirm it actually emits a
+    # span, and that the span nests under the request's trace (shared trace id,
+    # parented to the request span), which is what makes AppDependencies useful
+    # for "what did the database do during this specific request" rather than
+    # an unrelated pile of spans with no correlation to anything.
+    #
+    # configure_telemetry() (via configure_azure_monitor) installs the global
+    # TracerProvider itself, and OpenTelemetry only allows that once per
+    # process — so this attaches an in-memory span processor to whatever
+    # provider configure_telemetry() installed, rather than trying to
+    # replace it, to actually capture the spans it emits.
+    import sqlite3
+
+    import app.telemetry as telemetry_module
+    from opentelemetry import trace
+    from opentelemetry.instrumentation.dbapi import trace_integration
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+
+    configure_telemetry()
+
+    exporter = InMemorySpanExporter()
+    trace.get_tracer_provider().add_span_processor(SimpleSpanProcessor(exporter))
+
+    # sqlite3 stands in for mssql_python here — both are DB-API 2.0 modules
+    # with a module-level connect(), which is exactly the shape
+    # instrument_sqlalchemy patches; this isolates the assertion (nesting
+    # under a request span) from needing a reachable SQL Server.
+    telemetry_module._sqlalchemy_instrumented = False
+    trace_integration(sqlite3, "connect", "sqlite")
+
+    app = FastAPI()
+    instrument_fastapi(app)
+
+    @app.get("/ping")
+    def ping():
+        # cursor(), not the Connection.execute() shorthand — sqlite3's shorthand
+        # bypasses its own instrumented-cursor factory, and SQLAlchemy (what
+        # this app actually uses in production, on top of mssql_python) always
+        # goes through a real DB-API cursor, so this matches the real path.
+        conn = sqlite3.connect(":memory:")
+        cur = conn.cursor()
+        cur.execute("SELECT 1")
+        cur.fetchall()
+        return {"ok": True}
+
+    TestClient(app).get("/ping")
+
+    spans = {s.name: s for s in exporter.get_finished_spans()}
+    request_span = spans["GET /ping"]
+    db_span = spans["SELECT"]
+    assert db_span.context.trace_id == request_span.context.trace_id
+    assert db_span.parent is not None

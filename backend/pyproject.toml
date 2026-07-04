@@ -53,13 +53,21 @@ dependencies = [
     # produced no spans here). Declared explicitly so it's guaranteed present;
     # unpinned to resolve within the distro's compatible version range.
     "opentelemetry-instrumentation-fastapi",
-    # SQLAlchemy statement tracing — emits one dependency span per executed query
-    # (SQL text, target server/db, duration) so database time shows up in App
-    # Insights AppDependencies, nested under the request span. Applied in
-    # telemetry.instrument_sqlalchemy by patching create_engine so the per-user OBO
-    # engines built on demand in connection.py are traced too. Not pulled in by the
-    # distro (it doesn't instrument SQLAlchemy); unpinned to track its version range.
-    "opentelemetry-instrumentation-sqlalchemy",
+    # Database statement tracing — emits one dependency span per executed query
+    # (SQL text, duration) so database time shows up in App Insights
+    # AppDependencies, nested under the request span. Applied in
+    # telemetry.instrument_sqlalchemy by patching mssql_python.connect directly
+    # (DB-API layer, not SQLAlchemy) so every connection.py engine — the
+    # reflection engine and each per-user OBO engine — is traced regardless of
+    # SQLAlchemy version. Deliberately NOT opentelemetry-instrumentation-
+    # sqlalchemy: every released version (<2.1.0 as of 0.64b0) is incompatible
+    # with the SQLAlchemy 2.1 line this app requires for the mssql+mssqlpython
+    # dialect, and its default behaviour on an unsupported version is to log a
+    # warning and silently skip patching while still reporting success — this
+    # app shipped with zero SQL spans for a period before that was caught (see
+    # git history). Not pulled in by the distro; unpinned to track its version
+    # range.
+    "opentelemetry-instrumentation-dbapi",
 ]
 
 [project.optional-dependencies]

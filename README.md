@@ -528,18 +528,20 @@ every server-side log line for that request. To trace a single action end-to-end
    is also the faster signal to check first, since it lands in Log Analytics within seconds,
    while `AppTraces`/`AppRequests` can lag several minutes.
 
-### Known gap
+### SQL statement timing
 
-SQL statement timing (`AppDependencies`) is **not currently available**: this app pins
-SQLAlchemy to the 2.1 line (required for the `mssql+mssqlpython` dialect — see
-[CLAUDE.md's dependency/driver stack notes](CLAUDE.md#dependency-and-driver-stack)), and no
-released version of `opentelemetry-instrumentation-sqlalchemy` supports SQLAlchemy past the
-2.0 line. The instrumentor's default behaviour on an unsupported version is to log a warning
-and silently decline to patch `create_engine` while still reporting success —
-`instrument_sqlalchemy()` is configured to turn that into a real, visible failure
-(`raise_exception_on_conflict=True`) rather than let the app claim database tracing works when
-it doesn't. Until an upstream release adds 2.1 support, database time is visible only as part
-of total request duration in `AppRequests`, not broken out per statement.
+Database time shows up as `AppDependencies` spans (SQL text, duration), nested under the
+request span. This app pins SQLAlchemy to the 2.1 line (required for the `mssql+mssqlpython`
+dialect — see [CLAUDE.md's dependency/driver stack notes](CLAUDE.md#dependency-and-driver-stack)),
+which no released version of `opentelemetry-instrumentation-sqlalchemy` supports (it caps at
+`<2.1.0`, and its default behaviour on an unsupported version is to log a warning and silently
+decline to instrument at all while still reporting success — a real incident here for a
+while, until `instrument_sqlalchemy()` was changed to turn that into a visible failure instead
+of a silent one). The fix was to instrument one layer lower: `instrument_sqlalchemy()` patches
+`mssql_python.connect` directly via `opentelemetry-instrumentation-dbapi`, which has no
+SQLAlchemy version dependency at all — every engine `connection.py` builds calls that same
+`connect` underneath the SQLAlchemy dialect regardless of SQLAlchemy's version, so this
+approach doesn't need to wait on the SQLAlchemy-specific instrumentor catching up.
 
 ## License
 
