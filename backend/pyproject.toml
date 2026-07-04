@@ -32,6 +32,19 @@ dependencies = [
     # only when APPLICATIONINSIGHTS_CONNECTION_STRING is set (see telemetry.py),
     # so it's inert in local/test runs.
     "azure-monitor-opentelemetry>=1.6",
+    # azure-monitor-opentelemetry pins opentelemetry-sdk/-api to a narrow ~=
+    # range of its own (e.g. 1.8.2 requires ~=1.36), but nothing in this
+    # project's tree enforced that: the unpinned instrumentation packages
+    # below let uv's resolver pick a newer opentelemetry-sdk (1.43.0) that
+    # satisfied every *declared* range yet broke at import time —
+    # azure-monitor-opentelemetry-exporter's `from opentelemetry.sdk._logs
+    # import LogData` no longer resolves on 1.43, since LogData moved/was
+    # removed after the exporter's actual compatible ~=1.35 window. Pin these
+    # explicitly so the resolver can't silently drift them apart again; bump
+    # in lockstep with azure-monitor-opentelemetry, verified against its
+    # PyPI requires_dist for the version being upgraded to.
+    "opentelemetry-sdk>=1.36,<1.37",
+    "opentelemetry-api>=1.36,<1.37",
     # FastAPI request-span instrumentation, applied explicitly per-app in
     # telemetry.instrument_fastapi (the distro's class-level auto-instrumentation
     # produced no spans here). Declared explicitly so it's guaranteed present;
