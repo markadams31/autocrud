@@ -31,20 +31,23 @@ dependencies = [
     # Ships logs/traces/exceptions/requests to Application Insights. Activated
     # only when APPLICATIONINSIGHTS_CONNECTION_STRING is set (see telemetry.py),
     # so it's inert in local/test runs.
-    "azure-monitor-opentelemetry>=1.6",
-    # azure-monitor-opentelemetry pins opentelemetry-sdk/-api to a narrow ~=
-    # range of its own (e.g. 1.8.2 requires ~=1.36), but nothing in this
-    # project's tree enforced that: the unpinned instrumentation packages
-    # below let uv's resolver pick a newer opentelemetry-sdk (1.43.0) that
-    # satisfied every *declared* range yet broke at import time —
-    # azure-monitor-opentelemetry-exporter's `from opentelemetry.sdk._logs
-    # import LogData` no longer resolves on 1.43, since LogData moved/was
-    # removed after the exporter's actual compatible ~=1.35 window. Pin these
-    # explicitly so the resolver can't silently drift them apart again; bump
-    # in lockstep with azure-monitor-opentelemetry, verified against its
-    # PyPI requires_dist for the version being upgraded to.
-    "opentelemetry-sdk>=1.36,<1.37",
-    "opentelemetry-api>=1.36,<1.37",
+    #
+    # Floor raised to 1.8.9 (was >=1.6): 1.8.2 requires opentelemetry-sdk~=1.36,
+    # but this app's other instrumentation packages (opentelemetry-instrumentation-
+    # fastapi, needed at >=0.64b0 for compatibility with fastapi>=0.110 — older
+    # 0.57b0 crashes every request with `AttributeError: '_IncludedRouter' object
+    # has no attribute 'path'`, a routing-internals shape that only exists in
+    # newer FastAPI/Starlette) pull in opentelemetry-sdk 1.43.x. uv's resolver
+    # then picked 1.8.2 anyway since its floor was satisfied, producing an
+    # opentelemetry-sdk that satisfies every *declared* range on paper but breaks
+    # 1.8.2's own exporter at import time (`ImportError: cannot import name
+    # 'LogData' from 'opentelemetry.sdk._logs'` — LogData moved after the 1.8.2
+    # exporter's actual ~=1.35 window). 1.8.9 requires opentelemetry-sdk~=1.43.0
+    # and opentelemetry-instrumentation-fastapi>=0.64b0,<0.65.0 — internally
+    # consistent with what this app's FastAPI version actually needs. Pin the
+    # floor (not just >=1.6) so a future resolve can't silently regress to an
+    # older azure-monitor-opentelemetry release whose own pins are stale again.
+    "azure-monitor-opentelemetry>=1.8.9",
     # FastAPI request-span instrumentation, applied explicitly per-app in
     # telemetry.instrument_fastapi (the distro's class-level auto-instrumentation
     # produced no spans here). Declared explicitly so it's guaranteed present;
