@@ -99,6 +99,25 @@ describe('useUndoableDelete.remove', () => {
     expect(toast.success).toHaveBeenCalledWith('Deleted A.', { id: 'toast-id', duration: 2500 })
   })
 
+  it('drops the Undo action once commit starts, and a stale click on it is a no-op', async () => {
+    // Regression test: clicking Undo after the delete has already been (or is
+    // about to be) sent to the server must NOT restore the row, since the
+    // server-side deletion can't be un-done by a client-side cache write. Before
+    // the fix, Undo stayed wired up through the success toast, so a click here
+    // would restore the row locally while it stayed deleted in the database.
+    const { result, ids } = setup()
+    ;(api.deleteRow as ReturnType<typeof vi.fn>).mockResolvedValue({ deleted: '1' })
+    result.current.remove({ WidgetID: 1, Name: 'A' }, { label: 'A' })
+
+    await vi.advanceTimersByTimeAsync(5000) // UNDO_WINDOW_SECONDS — commit() starts
+    undoFromToast().action.onClick() // stale click, arriving after commit began
+    await vi.advanceTimersByTimeAsync(0) // let the in-flight commit() promise settle
+
+    expect(api.deleteRow).toHaveBeenCalledTimes(1) // delete still went through
+    expect(ids()).toEqual([2]) // NOT restored — row stays gone
+    expect(toast.success).toHaveBeenCalledWith('Deleted A.', { id: 'toast-id', duration: 2500 })
+  })
+
   it('restores the row and shows a FINITE-duration error toast carrying the backend reason', async () => {
     // Two guards: the error toast must set its own duration (or it inherits the
     // pending toast's duration:Infinity and never dismisses), and it surfaces the

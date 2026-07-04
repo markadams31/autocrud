@@ -95,15 +95,18 @@ function beginUndoableDelete(
     `${opts.pendingMessage} in ${secs} second${secs === 1 ? '' : 's'}`
 
   const undo = () => {
+    // Once commit() has started, the delete is no longer cancellable: it may
+    // already have reached the server, and by the time a success toast shows,
+    // it certainly has. Clicking Undo here would restore the row locally while
+    // it stays deleted in the database — a false "restored" state. So Undo is
+    // only wired up during the countdown; see below where `action` is dropped
+    // the instant commit() begins.
+    if (committing) return
     undone = true
     window.clearInterval(interval)
     restore()
     toast.dismiss(toastId) // an Infinity-duration toast won't close itself
-    // `raced` = the undo landed *after* the real delete was already dispatched
-    // (the toast stays clickable during the in-flight commit), so the restore is
-    // only local while the server delete still commits. Telemetry surfaces how
-    // often that race actually bites.
-    trackEvent('row_delete_undo', { schema, table, raced: committing })
+    trackEvent('row_delete_undo', { schema, table })
   }
 
   // Re-supplied on every toast update so the Undo button survives the countdown.
@@ -113,6 +116,12 @@ function beginUndoableDelete(
 
   const commit = async () => {
     committing = true
+    // Irreversible from here — drop the Undo action so the pending toast can't
+    // be clicked mid-flight and imply a cancel that can't actually happen.
+    // `action: undefined` is required, not just omitted: Sonner updates a toast
+    // by shallow-merging the new options onto the old ones, so leaving `action`
+    // out entirely would let the previous toast's Undo button carry over.
+    toast(`${opts.pendingMessage}…`, { id: toastId, duration: Infinity, action: undefined })
     try {
       const successMessage = await opts.commit()
       invalidateTableWrites(qc, schema, table) // refresh rows + FK dropdowns
