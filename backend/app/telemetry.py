@@ -199,7 +199,18 @@ def instrument_sqlalchemy() -> bool:
 
         # No engine argument: wrap create_engine so every engine built afterwards
         # is traced (the per-user OBO engines have no fixed handle to pass here).
-        SQLAlchemyInstrumentor().instrument()
+        #
+        # raise_exception_on_conflict=True: the instrumentor's default silently
+        # logs a DependencyConflict and returns success when the installed
+        # SQLAlchemy version falls outside its declared support range, WITHOUT
+        # actually patching create_engine — this app's SQLAlchemy 2.1 pin (see
+        # connection.py) is outside opentelemetry-instrumentation-sqlalchemy's
+        # declared <2.1.0 ceiling (true as of 0.64b0, its latest release), so
+        # every prior deploy reported "SQLAlchemy database instrumentation
+        # enabled" while zero SQL statements ever reached AppDependencies.
+        # Forcing the conflict to raise routes it through the except below,
+        # so a silent no-op becomes an honest, visible failure.
+        SQLAlchemyInstrumentor().instrument(raise_exception_on_conflict=True)
     except Exception:  # noqa: BLE001 — DB spans are a bonus, never fatal
         logger.warning(
             "SQLAlchemy instrumentation unavailable — no database dependency spans.",

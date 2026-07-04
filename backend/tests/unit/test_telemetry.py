@@ -3,23 +3,30 @@ test_telemetry.py — Application Insights wiring actually survives a real reque
 
 telemetry.py is inert unless APPLICATIONINSIGHTS_CONNECTION_STRING is set, so
 none of this ever runs in the rest of the suite — a regression here has zero
-coverage anywhere else. That blind spot let two real incidents ship: an
+coverage anywhere else. That blind spot let three real incidents ship: an
 azure-monitor-opentelemetry release whose exporter couldn't import against the
-opentelemetry-sdk version the resolver picked, and (once merely pinning
+opentelemetry-sdk version the resolver picked; (once merely pinning
 opentelemetry-sdk to fix that) an opentelemetry-instrumentation-fastapi version
 too old for this app's FastAPI, which crashed every request with
-`AttributeError: '_IncludedRouter' object has no attribute 'path'` — instrumentation
-setup itself reported success in both cases; only firing a request through the
-instrumented app ever hit the broken code path. These cases set a real (fake-value)
-connection string and drive an actual request, so a version combination that only
-breaks under live traffic fails here instead of in production.
+`AttributeError: '_IncludedRouter' object has no attribute 'path'`; and
+SQLAlchemyInstrumentor().instrument() reporting success while silently declining
+to patch create_engine at all, because opentelemetry-instrumentation-sqlalchemy's
+declared support caps below the SQLAlchemy 2.1 line this app requires (see
+connection.py) — its default dependency-conflict handling logs a warning and
+returns normally instead of raising, so instrument_sqlalchemy() had no way to
+notice. In all three cases the *setup call itself* reported success; only
+exercising the actually-instrumented code path (a live request, or the patched
+attribute) ever revealed the break. These cases set a real (fake-value)
+connection string and check for real effects — a request flowing through the
+instrumented app, the create_engine attribute actually being wrapped — so a
+regression that only breaks under live traffic fails here instead of production.
 """
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.telemetry import configure_telemetry, instrument_fastapi
+from app.telemetry import configure_telemetry, instrument_fastapi, instrument_sqlalchemy
 
 _FAKE_CONNECTION_STRING = (
     "InstrumentationKey=00000000-0000-0000-0000-000000000000;"
@@ -71,3 +78,33 @@ def test_instrumented_app_serves_a_real_request(telemetry_env):
 def test_configure_telemetry_is_noop_without_connection_string(monkeypatch):
     monkeypatch.delenv("APPLICATIONINSIGHTS_CONNECTION_STRING", raising=False)
     assert configure_telemetry() is False
+
+
+def test_instrument_sqlalchemy_return_value_matches_whether_it_actually_patched(
+    telemetry_env,
+):
+    # Regression guard for the third incident: instrument_sqlalchemy() returning
+    # True was not sufficient evidence either — SQLAlchemyInstrumentor's default
+    # dependency-conflict handling logs a warning and returns normally instead of
+    # raising when the installed SQLAlchemy falls outside its declared support
+    # range (true here: opentelemetry-instrumentation-sqlalchemy caps at
+    # SQLAlchemy <2.1, this app requires the 2.1 line — see connection.py), so a
+    # silent no-op looked identical to success. Assert the return value agrees
+    # with the actual effect (sqlalchemy.create_engine having been replaced),
+    # not that the effect happened — currently there IS no compatible release,
+    # so a "yes it worked" result here would itself be the regression.
+    import app.telemetry as telemetry_module
+    import sqlalchemy
+
+    original_create_engine = sqlalchemy.create_engine
+    telemetry_module._sqlalchemy_instrumented = False
+    try:
+        result = instrument_sqlalchemy()
+        actually_patched = sqlalchemy.create_engine is not original_create_engine
+        assert result is actually_patched
+    finally:
+        if telemetry_module._sqlalchemy_instrumented:
+            from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
+
+            SQLAlchemyInstrumentor().uninstrument()
+            telemetry_module._sqlalchemy_instrumented = False
