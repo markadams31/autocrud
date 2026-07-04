@@ -254,6 +254,7 @@ export type ErrorCode =
   | 'UNAUTHENTICATED'
   | 'PERMISSION_DENIED'
   | 'DATABASE_UNAVAILABLE'
+  | 'RATE_LIMITED'
   | 'INTERNAL_ERROR'
 
 /** The single error JSON shape every non-2xx response uses (errors.py). */
