@@ -24,10 +24,11 @@ loudly rather than failing on the first request.
 
 from __future__ import annotations
 
-from typing import Annotated
+import os
+from typing import Annotated, Optional
 
 from dotenv import load_dotenv
-from pydantic import Field, ValidationError, field_validator
+from pydantic import Field, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 # Load a .env (searching upward from this file) into the process environment
@@ -47,6 +48,50 @@ class Settings(BaseSettings):
     # from an older deployment is ignored via extra="ignore".)
     db_server: str = Field(min_length=1)
     db_database: str = Field(min_length=1)
+
+    # How EVERY database connection authenticates:
+    #   "entra" — the production posture. Entra tokens end to end: the managed
+    #             identity for schema reflection, the signed-in user's EasyAuth
+    #             OBO token for all data access (see connection.py).
+    #   "local" — the zero-Azure development mode. One plain SQL login
+    #             (DB_USERNAME/DB_PASSWORD) is used for reflection AND data —
+    #             e.g. the docker-compose SQL Server. The per-user-grants
+    #             security model does not apply: every request runs as that one
+    #             login, so this mode is for local development and demos only.
+    #             It is refused outright on App Service (see the validator
+    #             below) so a misconfigured deployment can never silently fall
+    #             back to a shared SQL login in production.
+    db_auth_mode: str = Field(default="entra")
+    db_username: Optional[str] = None
+    db_password: Optional[str] = None
+
+    @field_validator("db_auth_mode", mode="before")
+    @classmethod
+    def _normalise_auth_mode(cls, value: object) -> object:
+        if isinstance(value, str):
+            v = value.strip().lower()
+            if v not in {"entra", "local"}:
+                raise ValueError("must be one of: entra, local")
+            return v
+        return value
+
+    @model_validator(mode="after")
+    def _validate_local_mode(self) -> "Settings":
+        if self.db_auth_mode == "local":
+            # WEBSITE_SITE_NAME is set by App Service on every deployed app —
+            # its presence means this process is running in Azure, where local
+            # SQL-login mode must never activate.
+            if os.getenv("WEBSITE_SITE_NAME"):
+                raise ValueError(
+                    "DB_AUTH_MODE=local is refused on App Service "
+                    "(WEBSITE_SITE_NAME is set). Local mode is for development "
+                    "machines and docker-compose only."
+                )
+            if not self.db_username or not self.db_password:
+                raise ValueError(
+                    "DB_AUTH_MODE=local requires DB_USERNAME and DB_PASSWORD"
+                )
+        return self
 
     # How the signed-in user's identity appears in logs (access log + the CRUD
     # audit lines). The user's email is PII; in a shared/production deployment
@@ -135,6 +180,9 @@ _settings = _build_settings()
 # surface across the app.
 DB_SERVER:        str       = _settings.db_server
 DB_DATABASE:      str       = _settings.db_database
+DB_AUTH_MODE:     str       = _settings.db_auth_mode
+DB_USERNAME:      str | None = _settings.db_username
+DB_PASSWORD:      str | None = _settings.db_password
 DB_SCHEMAS:       list[str] = _settings.db_schemas
 DB_AUDIT_COLUMNS: set[str]  = _settings.db_audit_columns
 BULK_MAX_ROWS:    int       = _settings.bulk_max_rows

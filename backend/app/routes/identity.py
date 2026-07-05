@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Request
 
+from app import config
 from app.auth_headers import (
     CLIENT_PRINCIPAL_ID,
     CLIENT_PRINCIPAL_NAME,
@@ -33,8 +34,18 @@ def whoami(request: Request) -> dict:
     flag. All fields come straight from EasyAuth headers; `name`/`id` are null
     when no identity is present (e.g. running locally without the auth proxy),
     which the frontend treats as "not signed in" and renders nothing for.
+
+    Local auth mode (DB_AUTH_MODE=local) has no EasyAuth and no headers, but
+    every request genuinely runs as the configured SQL login — report that, so
+    the UI shows who the writes will be attributed to instead of "not signed in".
     """
     name = request.headers.get(CLIENT_PRINCIPAL_NAME)
+    if config.DB_AUTH_MODE == "local" and not name:
+        return {
+            "name": f"{config.DB_USERNAME} (local)",
+            "id": None,
+            "authenticated": True,
+        }
     return {
         "name": name,
         "id": request.headers.get(CLIENT_PRINCIPAL_ID),

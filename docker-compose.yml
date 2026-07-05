@@ -1,0 +1,83 @@
+# Zero-Azure local mode: the full application against a local SQL Server, no
+# Azure subscription, no Entra sign-in, no cloud resources.
+#
+#   docker compose up --build
+#   → open http://localhost:8000
+#
+# Three services:
+#   db       SQL Server 2025 (the version the app targets — native json/vector).
+#   db-init  One-shot: creates the database and loads the demo schema + data
+#            (database/seed.sql) on first run only; see database/init-local.sh.
+#   app      The production image (SPA + API in one origin), built from this
+#            repo, running in DB_AUTH_MODE=local — one SQL login for
+#            everything. The per-user-grants security model does not apply in
+#            this mode; it exists for local development and demos. The app
+#            refuses to start in this mode on App Service.
+#
+# Knobs (environment variables, all optional):
+#   AUTOCRUD_PORT       host port for the app        (default 8000)
+#   AUTOCRUD_SQL_PORT   host port for SQL Server     (default 1433) — exposed so
+#                       the native dev loop (uv run uvicorn / npm run dev) and
+#                       tools like SSMS/Azure Data Studio can reach the same DB
+#   MSSQL_SA_PASSWORD   the sa password              (default below, local only)
+#
+# Reset to a fresh demo dataset: docker compose down -v && docker compose up
+
+name: autocrud
+
+services:
+  db:
+    image: mcr.microsoft.com/mssql/server:2025-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: Developer
+      # A default password makes `docker compose up` work with zero setup; it
+      # protects a throwaway local container holding demo data, nothing more.
+      MSSQL_SA_PASSWORD: &sa_password ${MSSQL_SA_PASSWORD:-LocalDev!Passw0rd1}
+    ports:
+      - "${AUTOCRUD_SQL_PORT:-1433}:1433"
+    volumes:
+      - mssql-data:/var/opt/mssql
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -b -Q 'SELECT 1' -o /dev/null",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  db-init:
+    image: mcr.microsoft.com/mssql/server:2025-latest
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      MSSQL_SA_PASSWORD: *sa_password
+      DB_NAME: autocrud
+    volumes:
+      - ./database:/database:ro
+    entrypoint: ["/bin/bash", "/database/init-local.sh"]
+    restart: "no"
+
+  app:
+    build: .
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    environment:
+      DB_AUTH_MODE: local
+      DB_SERVER: db
+      DB_DATABASE: autocrud
+      DB_USERNAME: sa
+      DB_PASSWORD: *sa_password
+      DB_SCHEMAS: dbo,ppm
+      DB_AUDIT_COLUMNS: CreatedBy,CreatedDate,ModifiedBy,ModifiedDate
+      LOG_LEVEL: INFO
+    ports:
+      - "${AUTOCRUD_PORT:-8000}:8000"
+
+volumes:
+  mssql-data:

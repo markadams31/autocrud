@@ -24,6 +24,28 @@ runtime from the API's metadata; nothing is table-specific.*
 **Stack:** FastAPI · SQLAlchemy 2.1 · mssql-python · Pydantic · React 19 · TypeScript ·
 TanStack Query · Azure SQL / Entra ID · OpenTelemetry · Terraform
 
+## Try it now — no Azure required
+
+The only prerequisite is Docker:
+
+```bash
+git clone https://github.com/markadams31/autocrud.git
+cd autocrud
+docker compose up --build
+```
+
+Then open **http://localhost:8000**. That's the complete application — the real
+production image (SPA + API, one origin) against a local SQL Server 2025 seeded with a
+worked example schema (project portfolio: computed columns, temporal history, composite
+keys, rowversion concurrency, cross-schema FKs). First run builds the image and pulls SQL
+Server, so allow a few minutes; after that it starts in seconds. Reset to a fresh demo
+dataset with `docker compose down -v`.
+
+This *local mode* uses one SQL login for everything, so the per-user authorization model —
+the interesting part of the production design — doesn't apply here; see
+[Running locally](#running-locally) for the hosted setup that exercises it, and for the
+live-reload development loop.
+
 ## Highlights
 
 A few decisions worth a closer look — each is covered in depth further down:
@@ -442,8 +464,10 @@ repo-root `Dockerfile` produces this automatically — and runs API-only when it
 
 | Variable | Required | Description |
 |---|---|---|
-| `DB_SERVER` | Yes | Azure SQL server hostname |
+| `DB_SERVER` | Yes | SQL server hostname (Azure SQL FQDN, or e.g. `localhost` in local auth mode) |
 | `DB_DATABASE` | Yes | Database name |
+| `DB_AUTH_MODE` | No | `entra` (default) — Entra tokens end to end, the production posture. `local` — one SQL login (`DB_USERNAME`/`DB_PASSWORD`) for everything, for the zero-Azure development mode; refused on App Service |
+| `DB_USERNAME` / `DB_PASSWORD` | With `local` | The SQL login for `DB_AUTH_MODE=local` (e.g. the docker-compose `sa`) |
 | `DB_SCHEMAS` | Yes | Comma-separated list of schemas to reflect (e.g. `dbo` or `dbo,hr,finance`) |
 | `DB_AUDIT_COLUMNS` | No | Comma-separated, case-insensitive names of database-managed/audit columns to exclude from writes (none by default) |
 | `BULK_MAX_ROWS` | No | Max rows a single bulk operation (delete or update) may touch in one transaction — defaults to `1000` |
@@ -465,10 +489,51 @@ missing variables in a single error rather than one at a time.
 
 ## Running locally
 
-The app authenticates every database connection as a real Microsoft Entra user, so a
-local run needs an **Azure SQL database** and an **Entra identity** — there is no SQL
-username/password or local-only code path (by design). Plan on ~15 minutes the first time;
-most of it is one-off database setup. The steps below take a fresh clone to a running app.
+Two paths, by what you're here to do:
+
+- **Just run it / hack on it without a cloud** → *local mode* (below). Docker is the only
+  prerequisite; nothing to configure.
+- **Exercise the real security model** (per-user Entra tokens, SQL-grant authorization) →
+  *hosted mode* (further down). Needs an Azure SQL database and an Entra identity.
+
+### Local mode (zero Azure)
+
+The complete app in one command — see [Try it now](#try-it-now--no-azure-required):
+
+```bash
+docker compose up --build     # → http://localhost:8000
+```
+
+For a development loop (code changes, hot reload) run the database in Docker but the app
+natively. `DB_AUTH_MODE=local` makes every connection use one SQL login instead of Entra
+tokens — no auth proxy needed, so it's two processes, not three:
+
+```bash
+docker compose up db db-init            # SQL Server 2025 + demo seed (once)
+
+# Terminal 1 — the API, in local auth mode (port 8000)
+cd backend
+DB_AUTH_MODE=local DB_SERVER=localhost DB_DATABASE=autocrud \
+DB_USERNAME=sa DB_PASSWORD='LocalDev!Passw0rd1' \
+DB_SCHEMAS=dbo,ppm DB_AUDIT_COLUMNS=CreatedBy,CreatedDate,ModifiedBy,ModifiedDate \
+uv run uvicorn app.main:app --reload
+# (or put those values in a repo-root .env — see .env.example's local-mode block)
+
+# Terminal 2 — the frontend dev server (port 5173), proxying straight to the API
+cd frontend && npm install && AUTOCRUD_PROXY_TARGET=http://localhost:8000 npm run dev
+```
+
+Local mode is for development and demos only: every request runs as that single SQL login,
+so per-user grants don't apply, and the app refuses to start in this mode on App Service.
+The UI shows `sa (local)` as the signed-in user so writes are attributable at a glance.
+
+### Hosted mode (Azure SQL + Entra)
+
+The app authenticates every database connection as a real Microsoft Entra user, so this
+path needs an **Azure SQL database** and an **Entra identity**. Plan on ~15 minutes the
+first time; most of it is one-off database setup. (If you're provisioning the Azure
+environment itself, `pwsh infra/provision.ps1` does all of the below and more — see
+[`infra/README.md`](infra/README.md).) The steps below take a fresh clone to a running app.
 
 ### How auth works locally (read once)
 
@@ -580,8 +645,9 @@ components, linting, building) in more depth.
 The application is containerised — the repo-root [`Dockerfile`](Dockerfile) builds the React
 frontend and the FastAPI backend in one multi-stage image, so the SPA is baked in and served
 from the same origin. Infrastructure is provisioned with Terraform (Azure App Service,
-Container Registry, SQL, Entra/EasyAuth). See [`infra/README.md`](infra/README.md) for
-provisioning, image build/push, and post-provisioning steps.
+Container Registry, SQL, Entra/EasyAuth); one script takes an environment from tfvars to a
+running, seeded app: `pwsh infra/provision.ps1`. See [`infra/README.md`](infra/README.md)
+for details and the step-by-step equivalent.
 
 ## License
 

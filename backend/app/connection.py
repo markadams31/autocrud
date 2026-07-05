@@ -74,6 +74,7 @@ from tenacity import (
     wait_exponential_jitter,
 )
 
+from app import config
 from app.auth_headers import USER_ACCESS_TOKEN
 from app.config import DB_SERVER, DB_DATABASE
 from app.errors import ApiError, ErrorCode
@@ -92,6 +93,33 @@ logger = logging.getLogger(__name__)
 
 _CONN_STR = f"Server={DB_SERVER};Database={DB_DATABASE};Encrypt=yes;"
 _DIALECT_URL = "mssql+mssqlpython://"
+
+
+# ---------------------------------------------------------------------------
+# Local auth mode (DB_AUTH_MODE=local) — the zero-Azure development path.
+#
+# One plain SQL login authenticates every connection: reflection AND data. The
+# two-identity model above (and the per-user grants it enforces) does not
+# apply — every request runs as this single login, so the mode exists for
+# local development and demos against a local SQL Server (docker-compose)
+# only. config.py refuses it outright on App Service.
+#
+# TrustServerCertificate: the local container presents a self-signed
+# certificate; the connection stays encrypted, the chain just isn't verified.
+# That trade is unacceptable against a real server — which is exactly why it
+# lives only inside this mode's connection string.
+# ---------------------------------------------------------------------------
+
+def _local_conn_str() -> str:
+    return (
+        f"Server={DB_SERVER};Database={DB_DATABASE};"
+        f"Uid={config.DB_USERNAME};Pwd={config.DB_PASSWORD};"
+        f"Encrypt=yes;TrustServerCertificate=yes;"
+    )
+
+
+def _local_connect():
+    return mssql_python.connect(_local_conn_str())
 
 
 # ---------------------------------------------------------------------------
@@ -121,6 +149,10 @@ _credential = DefaultAzureCredential()
 
 
 def _reflection_connect():
+    # Local mode: the shared SQL login reflects too — there is no managed
+    # identity to fetch a token for.
+    if config.DB_AUTH_MODE == "local":
+        return _local_connect()
     # Fetch the managed-identity token per new physical connection (the
     # credential caches and refreshes it internally), so a pooled connection
     # opened later never carries a stale token.
@@ -297,14 +329,46 @@ def _engine_for(token: str) -> Engine:
 
 def dispose_user_engines() -> None:
     """
-    Dispose every cached user engine. Called from the application shutdown
-    hook so connection pools are closed deterministically rather than at
-    interpreter teardown.
+    Dispose every cached user engine (and the local-mode data engine, if one
+    was built). Called from the application shutdown hook so connection pools
+    are closed deterministically rather than at interpreter teardown.
     """
+    global _local_engine
     with _engine_cache_lock:
         for _, engine in list(_engine_cache.items()):
             engine.dispose()
         _engine_cache.clear()
+    with _local_engine_lock:
+        if _local_engine is not None:
+            _local_engine.dispose()
+            _local_engine = None
+
+
+# ---------------------------------------------------------------------------
+# Local-mode data engine — one shared pool, built lazily on first request.
+#
+# In local mode every request authenticates as the same SQL login, so a single
+# modest pool replaces the whole per-token cache above. Lazy so that merely
+# importing this module (tests, entra deployments) never builds it.
+# ---------------------------------------------------------------------------
+
+_local_engine: Optional[Engine] = None
+_local_engine_lock = threading.Lock()
+
+
+def _get_local_engine() -> Engine:
+    global _local_engine
+    with _local_engine_lock:
+        if _local_engine is None:
+            _local_engine = create_engine(
+                _DIALECT_URL,
+                creator=_local_connect,
+                poolclass=QueuePool,
+                pool_size=5,
+                max_overflow=5,
+                pool_pre_ping=True,
+            )
+        return _local_engine
 
 
 # ---------------------------------------------------------------------------
@@ -358,14 +422,22 @@ def _connect_with_retry(engine: Engine) -> Connection:
 
 def get_user_db(request: Request) -> Iterator[Connection]:
     """
-    Yield an OBO-authenticated connection for the signed-in user.
+    Yield a data-access connection for this request.
+
+    Entra mode (production): OBO-authenticated as the signed-in user — the
+    EasyAuth token is required and SQL Server enforces that user's grants.
+    Local mode: the shared SQL login's engine — no token, no per-user identity
+    (see the local-mode section above).
 
     Connection acquisition is retried on transient faults (see
     _connect_with_retry); the per-request transaction is not — it commits on
     success and rolls back if the route raises.
     """
-    token  = _user_token_from_request(request)
-    engine = _engine_for(token)
+    if config.DB_AUTH_MODE == "local":
+        engine = _get_local_engine()
+    else:
+        token  = _user_token_from_request(request)
+        engine = _engine_for(token)
 
     conn = _connect_with_retry(engine)
     try:

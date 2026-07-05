@@ -1,0 +1,9 @@
+# Shell scripts run inside Linux containers (docker-compose db-init) and must
+# keep LF endings even when the repo is cloned on Windows with autocrlf=true —
+# bash chokes on CRLF ('\r': command not found).
+*.sh text eol=lf
+
+# T-SQL scripts are executed by sqlcmd on both Windows (hosted provisioning)
+# and Linux (the local-mode init container); sqlcmd accepts either ending, but
+# pin LF so the bytes are identical everywhere.
+*.sql text eol=lf
