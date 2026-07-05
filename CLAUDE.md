@@ -35,6 +35,14 @@ Frontend (from `frontend/`): `npm ci`, then `npm run dev` / `npm run build` (tsc
 
 Docker image (build context is the **repo root**): `docker build -t autocrud .`
 
+Zero-Azure local mode: `docker compose up --build` runs the full app (production image + SQL
+Server 2025 seeded from `database/seed.sql`) at `http://localhost:8000` under
+`DB_AUTH_MODE=local` — one SQL login for everything; per-user grants are NOT exercised, and
+the mode is refused on App Service (`app/config.py`). Dev loop: `docker compose up db db-init`,
+run the backend natively with the local-mode env (see `.env.example`), and
+`AUTOCRUD_PROXY_TARGET=http://localhost:8000 npm run dev` (no auth proxy in this mode).
+Reset the demo data with `docker compose down -v`.
+
 Pre-commit/pre-push hooks run ruff, bandit, pyright, the fast pytest tiers, oxlint, terraform
 fmt, actionlint, and gitleaks — a commit that "does nothing" usually means a hook failed above
 the fold; read the full hook output.

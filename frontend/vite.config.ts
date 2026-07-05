@@ -17,16 +17,19 @@ export default defineConfig({
     },
   },
   server: {
-    // Same-origin backend paths are forwarded to the dev auth proxy (:8001),
-    // which injects the EasyAuth headers and forwards to the API (:8000).
+    // Same-origin backend paths are forwarded to the backend. The default
+    // target is the dev auth proxy (:8001), which injects the EasyAuth headers
+    // and forwards to the API (:8000) — the hosted-database workflow. For the
+    // zero-Azure local mode there is no auth proxy; point straight at the
+    // backend instead:
+    //   AUTOCRUD_PROXY_TARGET=http://localhost:8000 npm run dev
     // /me powers the signed-in user badge; /.auth is the session-refresh path.
-    proxy: {
-      '/api':   'http://localhost:8001',
-      '/meta':  'http://localhost:8001',
-      '/admin': 'http://localhost:8001',
-      '/me':    'http://localhost:8001',
-      '/.auth': 'http://localhost:8001',
-    },
+    proxy: Object.fromEntries(
+      ['/api', '/meta', '/admin', '/me', '/.auth'].map((route) => [
+        route,
+        process.env.AUTOCRUD_PROXY_TARGET ?? 'http://localhost:8001',
+      ]),
+    ),
   },
   build: {
     outDir: '../backend/app/frontend/dist',
