@@ -172,6 +172,28 @@ terraform state rm 'module.autocrud.azurerm_mssql_database.main[0]'
 
 ## Provisioning
 
+### The short way — one script
+
+After the one-time configuration (step 1 below) and `az login` (step 2), a
+single command provisions the environment end to end — terraform apply, image
+build, app restart, database seed + permission grants, adding you to the
+app-users group, and writing a local `.env`:
+
+```powershell
+pwsh infra/provision.ps1                    # dev
+pwsh infra/provision.ps1 -Environment prod
+```
+
+Safe to re-run: terraform is declarative, the demo seed is skipped when the
+database already has data (`-ReseedDatabase` forces a reset), and the
+group/permission steps tolerate repeats. `-SkipTerraform` runs only the
+post-provisioning steps.
+
+The steps below are what the script automates — kept for reference and for
+anyone who prefers to run them individually.
+
+### The long way — step by step
+
 Run these steps once per environment. Both environments are independent — each
 has its own state file and can be applied in any order.
 

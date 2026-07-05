@@ -5,6 +5,17 @@ resource "azurerm_service_plan" "main" {
   os_type             = "Linux"
   sku_name            = var.app_service_sku
   tags                = local.common_tags
+
+  # SINGLE INSTANCE, BY DESIGN — do not scale this plan out or add autoscale.
+  #
+  # The application keeps process-local state that is correct only with one
+  # instance: the reflected schema snapshot (backend/app/state.py — a second
+  # instance would keep serving a stale schema after POST /admin/refresh),
+  # the per-token engine cache, the /admin/refresh throttle, and the /health
+  # probe cache. Pinning worker_count here also makes Terraform revert any
+  # manual scale-out on the next apply, so the constraint is enforced rather
+  # than remembered.
+  worker_count = 1
 }
 
 # ---------------------------------------------------------------------------
