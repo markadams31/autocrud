@@ -41,6 +41,15 @@ keys, rowversion concurrency, cross-schema FKs). First run builds the image and 
 Server, so allow a few minutes; after that it starts in seconds. Reset to a fresh demo
 dataset with `docker compose down -v`.
 
+> **Seeing a login redirect or anything unexpected at localhost:8000?** Something else on
+> your machine is probably already bound to port 8000 and shadowing the app — on Windows,
+> Docker's wildcard bind can coexist *silently* with a native process bound to
+> `127.0.0.1:8000` (a forgotten `uvicorn`, say), and `localhost` resolves to the native one.
+> Check with `Get-NetTCPConnection -LocalPort 8000 -State Listen` / `lsof -i :8000`, stop
+> the other process, or run the app elsewhere: `AUTOCRUD_PORT=8080 docker compose up`.
+> (`AUTOCRUD_SQL_PORT` likewise moves SQL Server off 1433.) A quick identity check:
+> `curl localhost:8000/me` should return `"sa (local)"`.
+
 This *local mode* uses one SQL login for everything, so the per-user authorization model —
 the interesting part of the production design — doesn't apply here; see
 [Running locally](#running-locally) for the hosted setup that exercises it, and for the
