@@ -34,7 +34,7 @@ jobs:
       contents: read
       security-events: write # upload SARIF to code scanning
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # full history so a scheduled scan covers every commit
           persist-credentials: false
@@ -51,7 +51,7 @@ jobs:
         run: ./gitleaks detect --source . --redact --report-format sarif --report-path gitleaks.sarif
       - name: Upload SARIF
         if: ${{ !cancelled() }}
-        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
         with:
           sarif_file: gitleaks.sarif
           category: gitleaks
@@ -64,7 +64,7 @@ jobs:
       run:
         working-directory: backend
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Install uv
@@ -88,7 +88,7 @@ jobs:
       run:
         working-directory: backend
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Install uv
@@ -111,7 +111,7 @@ jobs:
       contents: read
       security-events: write
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # osv-scanner (OSV database) rather than `npm audit`, which is a flaky gate
@@ -130,7 +130,7 @@ jobs:
           --format sarif --output osv.sarif
       - name: Upload SARIF
         if: ${{ !cancelled() }}
-        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
         with:
           sarif_file: osv.sarif
           category: osv-scanner
