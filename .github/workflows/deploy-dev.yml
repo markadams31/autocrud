@@ -1,6 +1,6 @@
 name: Deploy · dev
 
-# Auto-deploy on push to main is OFF — Azure dig/dev infra (ACR, App Service,
+# Auto-deploy on push to main is OFF — the Azure dev environment infra (ACR, App Service,
 # OIDC app registration) is not currently provisioned, so merge-triggered
 # deploys only fail at azure/login. Re-enable the `push:` trigger below when
 # the environment is stood up again.
