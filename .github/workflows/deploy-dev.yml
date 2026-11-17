@@ -1,19 +1,14 @@
 name: Deploy · dev
 
-# Every merge to main ships to dev, after the full CI suite: CI gate → build the
-# ONE artifact (image.yml: buildx build + trivy gate + SBOM/SLSA attest) → deploy
-# it by immutable digest (deploy.yml). That same digest is what prod promotes —
-# nothing downstream is rebuilt.
+# Auto-deploy on push to main is OFF — the Azure dev environment infra (ACR, App Service,
+# OIDC app registration) is not currently provisioned, so merge-triggered
+# deploys only fail at azure/login. Re-enable the `push:` trigger below when
+# the environment is stood up again.
+#
+# Manual path still works: CI gate → build the ONE artifact (image.yml: buildx
+# + trivy + SBOM/SLSA attest) → deploy by immutable digest (deploy.yml). That
+# same digest is what prod promotes — nothing downstream is rebuilt.
 on:
-  push:
-    branches: [main]
-    # Docs-only changes (README, docs/, database/) don't affect the running
-    # application. Skip the full build+deploy cycle here as ci.yml already
-    # skips the suite for docs-only PRs.
-    paths-ignore:
-      - "**.md"
-      - "docs/**"
-      - "database/**"
   # Manual redeploy / rollback: supply a full image ref already in ACR
   # (registry/autocrud@sha256:...) to repoint dev at it without rebuilding.
   # Blank = build + deploy HEAD.
@@ -46,7 +41,7 @@ jobs:
     name: Build artifact
     needs: ci
     # Skip the build on a manual rollback to an already-built ref.
-    if: ${{ github.event_name == 'push' || inputs.image_ref == '' }}
+    if: ${{ inputs.image_ref == '' }}
     uses: ./.github/workflows/image.yml
     with:
       environment: dev
