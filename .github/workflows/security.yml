@@ -125,8 +125,11 @@ jobs:
             "https://github.com/google/osv-scanner/releases/download/v${OSV_VERSION}/osv-scanner_linux_amd64"
           chmod +x osv-scanner
       - name: Scan frontend lockfile
+        # --config picks up temporary IgnoredVulns (picomatch GHSA with no
+        # patched release). Auto-discovery does not apply with --lockfile.
         run: >-
           ./osv-scanner scan source --lockfile=frontend/package-lock.json
+          --config=osv-scanner.toml
           --format sarif --output osv.sarif
       - name: Upload SARIF
         if: ${{ !cancelled() }}

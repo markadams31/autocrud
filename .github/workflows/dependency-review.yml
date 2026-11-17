@@ -26,3 +26,7 @@ jobs:
           # — tighter bar for the ATO posture.
           fail-on-severity: moderate
           comment-summary-in-pr: on-failure
+          # Temporary: picomatch ≤4.0.7 has no patched release for
+          # GHSA-fc5q-39xc-vjpf (ReDoS). Drop this once >4.0.7 ships.
+          # See osv-scanner.toml for the matching OSV ignore.
+          allow-ghsas: GHSA-fc5q-39xc-vjpf
