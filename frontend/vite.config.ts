@@ -1,4 +1,4 @@
-import path from 'path'
+import path from 'node:path'
 import { defineConfig } from 'vite'
 import react, { reactCompilerPreset } from '@vitejs/plugin-react'
 import babel from '@rolldown/plugin-babel'
@@ -13,7 +13,8 @@ export default defineConfig({
   ],
   resolve: {
     alias: {
-      '@': path.resolve(__dirname, './src'),
+      // import.meta.dirname (not __dirname) — required by Vite's native config loader
+      '@': path.resolve(import.meta.dirname, './src'),
     },
   },
   server: {

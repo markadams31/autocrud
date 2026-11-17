@@ -1561,7 +1561,7 @@
         "required_on_create": false,
         "scale": null,
         "searchable": true,
-        "sql_type": "TEXT(16) COLLATE \"SQL_Latin1_General_CP1_CI_AS\""
+        "sql_type": "TEXT COLLATE \"SQL_Latin1_General_CP1_CI_AS\""
       },
       {
         "comment": null,
