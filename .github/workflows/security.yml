@@ -34,7 +34,7 @@ jobs:
       contents: read
       security-events: write # upload SARIF to code scanning
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # full history so a scheduled scan covers every commit
           persist-credentials: false
@@ -51,7 +51,7 @@ jobs:
         run: ./gitleaks detect --source . --redact --report-format sarif --report-path gitleaks.sarif
       - name: Upload SARIF
         if: ${{ !cancelled() }}
-        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           sarif_file: gitleaks.sarif
           category: gitleaks
@@ -64,11 +64,11 @@ jobs:
       run:
         working-directory: backend
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Install uv
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           enable-cache: true
       # Scan the application only (tests are excluded via [tool.bandit] in
@@ -88,11 +88,11 @@ jobs:
       run:
         working-directory: backend
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Install uv
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           enable-cache: true
       # Audit the resolved runtime dependencies (what actually ships) against the
@@ -111,7 +111,7 @@ jobs:
       contents: read
       security-events: write
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # osv-scanner (OSV database) rather than `npm audit`, which is a flaky gate
@@ -125,12 +125,15 @@ jobs:
             "https://github.com/google/osv-scanner/releases/download/v${OSV_VERSION}/osv-scanner_linux_amd64"
           chmod +x osv-scanner
       - name: Scan frontend lockfile
+        # --config picks up temporary IgnoredVulns (picomatch GHSA with no
+        # patched release). Auto-discovery does not apply with --lockfile.
         run: >-
           ./osv-scanner scan source --lockfile=frontend/package-lock.json
+          --config=osv-scanner.toml
           --format sarif --output osv.sarif
       - name: Upload SARIF
         if: ${{ !cancelled() }}
-        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           sarif_file: osv.sarif
           category: osv-scanner

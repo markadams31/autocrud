@@ -1,0 +1,8 @@
+# Temporary ignore — remove when picomatch ships a release > 4.0.7.
+# GHSA-fc5q-39xc-vjpf / CVE-2026-112366: ReDoS via single-branch repeated
+# extglobs. Affects all published versions (≤4.0.7); FIXED VERSION is "--".
+# Pulled transitively by Vite/micromatch; not reachable from request input in
+# this app (build-time / tooling path only).
+[[IgnoredVulns]]
+id = "GHSA-fc5q-39xc-vjpf"
+reason = "No patched picomatch release yet; ReDoS in glob parser, build-time transitive only"

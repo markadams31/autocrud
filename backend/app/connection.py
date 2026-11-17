@@ -408,7 +408,7 @@ _RETRYABLE_CONNECT_ERRORS = (OperationalError, InterfaceError, ResourceClosedErr
     # handler maps it to DATABASE_UNAVAILABLE.
     retry=retry_if_exception_type(_RETRYABLE_CONNECT_ERRORS),
     stop=stop_after_attempt(_CONNECT_RETRIES + 1),
-    wait=wait_exponential_jitter(initial=_CONNECT_BACKOFF_S, jitter=0.1),
+    wait=wait_exponential_jitter(multiplier=_CONNECT_BACKOFF_S, jitter=0.1),
     before_sleep=before_sleep_log(logger, logging.WARNING),
     reraise=True,
 )

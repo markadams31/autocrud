@@ -1,6 +1,6 @@
 import { defineConfig, mergeConfig } from 'vitest/config'
 
-import viteConfig from './vite.config'
+import viteConfig from './vite.config.ts'
 
 // Test config kept separate from the build config (vite.config.ts). It reuses
 // the app's plugins (so .tsx transforms exactly as in the build) and the `@`
